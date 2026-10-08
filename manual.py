@@ -78,6 +78,19 @@ _state = S()
 # =====================================================
 # RocketSim 世界
 # =====================================================
+import os
+_mesh_path = os.path.join(os.path.dirname(__file__), "collision_meshes")
+if os.path.exists(_mesh_path):
+    try:
+        rs.init(_mesh_path)
+    except Exception:
+        pass
+else:
+    try:
+        rs.init()
+    except Exception:
+        pass
+
 arena = rs.Arena(rs.GameMode.SOCCAR)
 car = arena.add_car(rs.Team.BLUE, rs.CarConfig.OCTANE)
 

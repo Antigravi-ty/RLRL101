@@ -1,0 +1,672 @@
+[
+  {
+    "id": "00_idle",
+    "phase": "baseline",
+    "desc": "静止基线（校对坐标系）",
+    "ticks": 61,
+    "max_z": 17.03,
+    "max_speed": 1.85,
+    "final_pitch_deg": -0.55,
+    "air_ticks": 0
+  },
+  {
+    "id": "10_jump_h1",
+    "phase": "jump_hold",
+    "desc": "jump hold=1t 升力响应",
+    "ticks": 122,
+    "max_z": 89.18,
+    "max_speed": 299.3,
+    "final_pitch_deg": -0.56,
+    "air_ticks": 104
+  },
+  {
+    "id": "10_jump_h2",
+    "phase": "jump_hold",
+    "desc": "jump hold=2t 升力响应",
+    "ticks": 123,
+    "max_z": 89.18,
+    "max_speed": 299.3,
+    "final_pitch_deg": -0.55,
+    "air_ticks": 104
+  },
+  {
+    "id": "10_jump_h3",
+    "phase": "jump_hold",
+    "desc": "jump hold=3t 升力响应",
+    "ticks": 124,
+    "max_z": 89.18,
+    "max_speed": 299.3,
+    "final_pitch_deg": -0.55,
+    "air_ticks": 104
+  },
+  {
+    "id": "10_jump_h4",
+    "phase": "jump_hold",
+    "desc": "jump hold=4t 升力响应",
+    "ticks": 125,
+    "max_z": 94.72,
+    "max_speed": 302.15,
+    "final_pitch_deg": -0.54,
+    "air_ticks": 109
+  },
+  {
+    "id": "10_jump_h6",
+    "phase": "jump_hold",
+    "desc": "jump hold=6t 升力响应",
+    "ticks": 127,
+    "max_z": 106.16,
+    "max_speed": 315.43,
+    "final_pitch_deg": -1.0,
+    "air_ticks": 118
+  },
+  {
+    "id": "10_jump_h8",
+    "phase": "jump_hold",
+    "desc": "jump hold=8t 升力响应",
+    "ticks": 129,
+    "max_z": 118.12,
+    "max_speed": 326.39,
+    "final_pitch_deg": -1.74,
+    "air_ticks": 123
+  },
+  {
+    "id": "10_jump_h12",
+    "phase": "jump_hold",
+    "desc": "jump hold=12t 升力响应",
+    "ticks": 133,
+    "max_z": 143.53,
+    "max_speed": 353.34,
+    "final_pitch_deg": -1.75,
+    "air_ticks": 127
+  },
+  {
+    "id": "10_jump_h16",
+    "phase": "jump_hold",
+    "desc": "jump hold=16t 升力响应",
+    "ticks": 137,
+    "max_z": 170.96,
+    "max_speed": 380.28,
+    "final_pitch_deg": -1.75,
+    "air_ticks": 131
+  },
+  {
+    "id": "10_jump_h20",
+    "phase": "jump_hold",
+    "desc": "jump hold=20t 升力响应",
+    "ticks": 141,
+    "max_z": 200.41,
+    "max_speed": 407.23,
+    "final_pitch_deg": -1.76,
+    "air_ticks": 135
+  },
+  {
+    "id": "10_jump_h24",
+    "phase": "jump_hold",
+    "desc": "jump hold=24t 升力响应",
+    "ticks": 145,
+    "max_z": 231.86,
+    "max_speed": 434.17,
+    "final_pitch_deg": -1.76,
+    "air_ticks": 139
+  },
+  {
+    "id": "10_jump_h28",
+    "phase": "jump_hold",
+    "desc": "jump hold=28t 升力响应",
+    "ticks": 149,
+    "max_z": 231.86,
+    "max_speed": 434.17,
+    "final_pitch_deg": -1.77,
+    "air_ticks": 143
+  },
+  {
+    "id": "10_jump_h32",
+    "phase": "jump_hold",
+    "desc": "jump hold=32t 升力响应",
+    "ticks": 153,
+    "max_z": 231.86,
+    "max_speed": 434.17,
+    "final_pitch_deg": -1.77,
+    "air_ticks": 147
+  },
+  {
+    "id": "15_dodge_window_w5",
+    "phase": "dodge_window",
+    "desc": "起跳后等待 5t 执行前翻 (测试 1.25s 翻滚有效窗口)",
+    "ticks": 70,
+    "max_z": 1561.8,
+    "max_speed": 280.83,
+    "final_pitch_deg": -1.6,
+    "air_ticks": 70
+  },
+  {
+    "id": "15_dodge_window_w15",
+    "phase": "dodge_window",
+    "desc": "起跳后等待 15t 执行前翻 (测试 1.25s 翻滚有效窗口)",
+    "ticks": 80,
+    "max_z": 1561.8,
+    "max_speed": 280.83,
+    "final_pitch_deg": -1.6,
+    "air_ticks": 80
+  },
+  {
+    "id": "15_dodge_window_w30",
+    "phase": "dodge_window",
+    "desc": "起跳后等待 30t 执行前翻 (测试 1.25s 翻滚有效窗口)",
+    "ticks": 95,
+    "max_z": 1561.8,
+    "max_speed": 280.83,
+    "final_pitch_deg": -1.6,
+    "air_ticks": 95
+  },
+  {
+    "id": "15_dodge_window_w60",
+    "phase": "dodge_window",
+    "desc": "起跳后等待 60t 执行前翻 (测试 1.25s 翻滚有效窗口)",
+    "ticks": 125,
+    "max_z": 1561.8,
+    "max_speed": 385.42,
+    "final_pitch_deg": -1.6,
+    "air_ticks": 125
+  },
+  {
+    "id": "15_dodge_window_w90",
+    "phase": "dodge_window",
+    "desc": "起跳后等待 90t 执行前翻 (测试 1.25s 翻滚有效窗口)",
+    "ticks": 155,
+    "max_z": 1561.8,
+    "max_speed": 547.92,
+    "final_pitch_deg": -1.6,
+    "air_ticks": 155
+  },
+  {
+    "id": "15_dodge_window_w120",
+    "phase": "dodge_window",
+    "desc": "起跳后等待 120t 执行前翻 (测试 1.25s 翻滚有效窗口)",
+    "ticks": 185,
+    "max_z": 1561.8,
+    "max_speed": 710.42,
+    "final_pitch_deg": -1.6,
+    "air_ticks": 185
+  },
+  {
+    "id": "15_dodge_window_w140",
+    "phase": "dodge_window",
+    "desc": "起跳后等待 140t 执行前翻 (测试 1.25s 翻滚有效窗口)",
+    "ticks": 205,
+    "max_z": 1561.8,
+    "max_speed": 818.75,
+    "final_pitch_deg": -1.6,
+    "air_ticks": 205
+  },
+  {
+    "id": "15_dodge_window_w150",
+    "phase": "dodge_window",
+    "desc": "起跳后等待 150t 执行前翻 (测试 1.25s 翻滚有效窗口)",
+    "ticks": 215,
+    "max_z": 1561.8,
+    "max_speed": 872.92,
+    "final_pitch_deg": -1.6,
+    "air_ticks": 215
+  },
+  {
+    "id": "15_dodge_window_w160",
+    "phase": "dodge_window",
+    "desc": "起跳后等待 160t 执行前翻 (测试 1.25s 翻滚有效窗口)",
+    "ticks": 225,
+    "max_z": 1561.8,
+    "max_speed": 927.08,
+    "final_pitch_deg": -1.6,
+    "air_ticks": 225
+  },
+  {
+    "id": "20_dodge_empty_v0",
+    "phase": "dodge_dir",
+    "desc": "empty dodge v=0",
+    "ticks": 69,
+    "max_z": 234.48,
+    "max_speed": 557.3,
+    "final_pitch_deg": -1.47,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_empty_v800",
+    "phase": "dodge_dir",
+    "desc": "empty dodge v=800",
+    "ticks": 69,
+    "max_z": 234.48,
+    "max_speed": 958.45,
+    "final_pitch_deg": -1.48,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_empty_v1500",
+    "phase": "dodge_dir",
+    "desc": "empty dodge v=1500",
+    "ticks": 69,
+    "max_z": 234.48,
+    "max_speed": 1581.24,
+    "final_pitch_deg": -1.48,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_front_v0",
+    "phase": "dodge_dir",
+    "desc": "front dodge v=0",
+    "ticks": 69,
+    "max_z": 118.72,
+    "max_speed": 568.65,
+    "final_pitch_deg": 22.31,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_front_v800",
+    "phase": "dodge_dir",
+    "desc": "front dodge v=800",
+    "ticks": 69,
+    "max_z": 117.06,
+    "max_speed": 1306.12,
+    "final_pitch_deg": 24.57,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_front_v1500",
+    "phase": "dodge_dir",
+    "desc": "front dodge v=1500",
+    "ticks": 69,
+    "max_z": 164.18,
+    "max_speed": 1996.58,
+    "final_pitch_deg": 30.34,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_back_v0",
+    "phase": "dodge_dir",
+    "desc": "back dodge v=0",
+    "ticks": 69,
+    "max_z": 67.3,
+    "max_speed": 594.57,
+    "final_pitch_deg": -21.57,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_back_v800",
+    "phase": "dodge_dir",
+    "desc": "back dodge v=800",
+    "ticks": 69,
+    "max_z": 67.3,
+    "max_speed": 850.18,
+    "final_pitch_deg": -20.73,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_back_v1500",
+    "phase": "dodge_dir",
+    "desc": "back dodge v=1500",
+    "ticks": 69,
+    "max_z": 67.3,
+    "max_speed": 1525.4,
+    "final_pitch_deg": -20.2,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_left_v0",
+    "phase": "dodge_dir",
+    "desc": "left dodge v=0",
+    "ticks": 69,
+    "max_z": 67.3,
+    "max_speed": 566.33,
+    "final_pitch_deg": -0.58,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_left_v800",
+    "phase": "dodge_dir",
+    "desc": "left dodge v=800",
+    "ticks": 69,
+    "max_z": 67.3,
+    "max_speed": 1049.46,
+    "final_pitch_deg": -0.58,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_left_v1500",
+    "phase": "dodge_dir",
+    "desc": "left dodge v=1500",
+    "ticks": 69,
+    "max_z": 67.3,
+    "max_speed": 1696.55,
+    "final_pitch_deg": 4.97,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_right_v0",
+    "phase": "dodge_dir",
+    "desc": "right dodge v=0",
+    "ticks": 69,
+    "max_z": 67.3,
+    "max_speed": 566.33,
+    "final_pitch_deg": -0.58,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_right_v800",
+    "phase": "dodge_dir",
+    "desc": "right dodge v=800",
+    "ticks": 69,
+    "max_z": 67.3,
+    "max_speed": 1049.46,
+    "final_pitch_deg": -0.58,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_right_v1500",
+    "phase": "dodge_dir",
+    "desc": "right dodge v=1500",
+    "ticks": 69,
+    "max_z": 67.3,
+    "max_speed": 1696.55,
+    "final_pitch_deg": 4.97,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_fl_v0",
+    "phase": "dodge_dir",
+    "desc": "fl dodge v=0",
+    "ticks": 69,
+    "max_z": 97.29,
+    "max_speed": 568.0,
+    "final_pitch_deg": 21.55,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_fl_v800",
+    "phase": "dodge_dir",
+    "desc": "fl dodge v=800",
+    "ticks": 69,
+    "max_z": 102.83,
+    "max_speed": 1251.16,
+    "final_pitch_deg": 20.76,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_fl_v1500",
+    "phase": "dodge_dir",
+    "desc": "fl dodge v=1500",
+    "ticks": 69,
+    "max_z": 111.57,
+    "max_speed": 1933.75,
+    "final_pitch_deg": 11.0,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_fr_v0",
+    "phase": "dodge_dir",
+    "desc": "fr dodge v=0",
+    "ticks": 69,
+    "max_z": 97.29,
+    "max_speed": 568.0,
+    "final_pitch_deg": 21.55,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_fr_v800",
+    "phase": "dodge_dir",
+    "desc": "fr dodge v=800",
+    "ticks": 69,
+    "max_z": 102.83,
+    "max_speed": 1251.16,
+    "final_pitch_deg": 20.76,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_fr_v1500",
+    "phase": "dodge_dir",
+    "desc": "fr dodge v=1500",
+    "ticks": 69,
+    "max_z": 111.57,
+    "max_speed": 1933.75,
+    "final_pitch_deg": 11.0,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_bl_v0",
+    "phase": "dodge_dir",
+    "desc": "bl dodge v=0",
+    "ticks": 69,
+    "max_z": 99.86,
+    "max_speed": 580.29,
+    "final_pitch_deg": -14.74,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_bl_v800",
+    "phase": "dodge_dir",
+    "desc": "bl dodge v=800",
+    "ticks": 69,
+    "max_z": 83.31,
+    "max_speed": 850.18,
+    "final_pitch_deg": -20.7,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_bl_v1500",
+    "phase": "dodge_dir",
+    "desc": "bl dodge v=1500",
+    "ticks": 69,
+    "max_z": 83.28,
+    "max_speed": 1525.4,
+    "final_pitch_deg": -20.76,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_br_v0",
+    "phase": "dodge_dir",
+    "desc": "br dodge v=0",
+    "ticks": 69,
+    "max_z": 99.86,
+    "max_speed": 580.29,
+    "final_pitch_deg": -14.74,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_br_v800",
+    "phase": "dodge_dir",
+    "desc": "br dodge v=800",
+    "ticks": 69,
+    "max_z": 83.31,
+    "max_speed": 850.18,
+    "final_pitch_deg": -20.7,
+    "air_ticks": 63
+  },
+  {
+    "id": "20_dodge_br_v1500",
+    "phase": "dodge_dir",
+    "desc": "br dodge v=1500",
+    "ticks": 69,
+    "max_z": 83.28,
+    "max_speed": 1525.4,
+    "final_pitch_deg": -20.76,
+    "air_ticks": 63
+  },
+  {
+    "id": "30_cancel_front_N1",
+    "phase": "flip_cancel",
+    "desc": "前翻 cancel delay=1t (S 键反向锁止俯仰)",
+    "ticks": 50,
+    "max_z": 67.38,
+    "max_speed": 568.65,
+    "final_pitch_deg": -26.1,
+    "air_ticks": 44
+  },
+  {
+    "id": "30_cancel_front_N2",
+    "phase": "flip_cancel",
+    "desc": "前翻 cancel delay=2t (S 键反向锁止俯仰)",
+    "ticks": 51,
+    "max_z": 67.44,
+    "max_speed": 568.65,
+    "final_pitch_deg": -50.51,
+    "air_ticks": 45
+  },
+  {
+    "id": "30_cancel_front_N3",
+    "phase": "flip_cancel",
+    "desc": "前翻 cancel delay=3t (S 键反向锁止俯仰)",
+    "ticks": 52,
+    "max_z": 69.75,
+    "max_speed": 568.65,
+    "final_pitch_deg": -61.33,
+    "air_ticks": 46
+  },
+  {
+    "id": "30_cancel_front_N4",
+    "phase": "flip_cancel",
+    "desc": "前翻 cancel delay=4t (S 键反向锁止俯仰)",
+    "ticks": 53,
+    "max_z": 71.09,
+    "max_speed": 568.65,
+    "final_pitch_deg": -61.65,
+    "air_ticks": 47
+  },
+  {
+    "id": "30_cancel_front_N5",
+    "phase": "flip_cancel",
+    "desc": "前翻 cancel delay=5t (S 键反向锁止俯仰)",
+    "ticks": 54,
+    "max_z": 71.87,
+    "max_speed": 568.65,
+    "final_pitch_deg": -60.63,
+    "air_ticks": 48
+  },
+  {
+    "id": "30_cancel_front_N6",
+    "phase": "flip_cancel",
+    "desc": "前翻 cancel delay=6t (S 键反向锁止俯仰)",
+    "ticks": 55,
+    "max_z": 73.21,
+    "max_speed": 568.65,
+    "final_pitch_deg": -61.99,
+    "air_ticks": 49
+  },
+  {
+    "id": "30_cancel_front_N8",
+    "phase": "flip_cancel",
+    "desc": "前翻 cancel delay=8t (S 键反向锁止俯仰)",
+    "ticks": 57,
+    "max_z": 74.95,
+    "max_speed": 568.65,
+    "final_pitch_deg": -64.22,
+    "air_ticks": 51
+  },
+  {
+    "id": "30_cancel_front_N12",
+    "phase": "flip_cancel",
+    "desc": "前翻 cancel delay=12t (S 键反向锁止俯仰)",
+    "ticks": 61,
+    "max_z": 78.38,
+    "max_speed": 568.65,
+    "final_pitch_deg": -66.15,
+    "air_ticks": 55
+  },
+  {
+    "id": "40_cancel2_A",
+    "phase": "cancel_cancel",
+    "desc": "cancel 的 cancel N1=3 N2=4",
+    "ticks": 66,
+    "max_z": 107.15,
+    "max_speed": 568.65,
+    "final_pitch_deg": 3.32,
+    "air_ticks": 60
+  },
+  {
+    "id": "40_cancel2_B",
+    "phase": "cancel_cancel",
+    "desc": "cancel 的 cancel N1=3 N2=8",
+    "ticks": 70,
+    "max_z": 106.83,
+    "max_speed": 568.65,
+    "final_pitch_deg": 14.99,
+    "air_ticks": 64
+  },
+  {
+    "id": "40_cancel2_C",
+    "phase": "cancel_cancel",
+    "desc": "cancel 的 cancel N1=5 N2=4",
+    "ticks": 68,
+    "max_z": 110.11,
+    "max_speed": 568.65,
+    "final_pitch_deg": 12.34,
+    "air_ticks": 62
+  },
+  {
+    "id": "40_cancel2_D",
+    "phase": "cancel_cancel",
+    "desc": "cancel 的 cancel N1=4 N2=6",
+    "ticks": 69,
+    "max_z": 104.84,
+    "max_speed": 568.65,
+    "final_pitch_deg": 14.89,
+    "air_ticks": 63
+  },
+  {
+    "id": "50_freefall",
+    "phase": "gravity",
+    "desc": "自由落体 z=2000（测重力）",
+    "ticks": 241,
+    "max_z": 1999.95,
+    "max_speed": 1305.42,
+    "final_pitch_deg": 0.0,
+    "air_ticks": 241
+  },
+  {
+    "id": "60_boost_then_dodge",
+    "phase": "boost_dodge",
+    "desc": "boost 加速 → 前翻（含 boost）",
+    "ticks": 109,
+    "max_z": 119.08,
+    "max_speed": 1337.81,
+    "final_pitch_deg": 23.94,
+    "air_ticks": 63
+  },
+  {
+    "id": "70_speed_flip_left",
+    "phase": "advanced_speed_flip",
+    "desc": "Speed Flip Left (纯键盘斜翻 + S Cancel + E 滚转 + 全程 Boost)",
+    "ticks": 60,
+    "max_z": 67.75,
+    "max_speed": 950.51,
+    "final_pitch_deg": 10.68,
+    "air_ticks": 52
+  },
+  {
+    "id": "71_speed_flip_right",
+    "phase": "advanced_speed_flip",
+    "desc": "Speed Flip Right (纯键盘斜翻 + S Cancel + Q 滚转 + 全程 Boost)",
+    "ticks": 60,
+    "max_z": 67.75,
+    "max_speed": 950.51,
+    "final_pitch_deg": 10.68,
+    "air_ticks": 52
+  },
+  {
+    "id": "72_wavedash_front",
+    "phase": "advanced_wavedash",
+    "desc": "Wave Dash Front (前向压头拍地爆发加速)",
+    "ticks": 45,
+    "max_z": 83.71,
+    "max_speed": 539.71,
+    "final_pitch_deg": -61.23,
+    "air_ticks": 39
+  },
+  {
+    "id": "73_half_flip",
+    "phase": "advanced_half_flip",
+    "desc": "Half Flip (倒车后翻 180° Cancel 调头)",
+    "ticks": 85,
+    "max_z": 65.9,
+    "max_speed": 835.03,
+    "final_pitch_deg": 70.37,
+    "air_ticks": 59
+  }
+]

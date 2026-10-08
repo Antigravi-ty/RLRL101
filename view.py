@@ -5,8 +5,20 @@ import numpy as np
 import pyqtgraph.opengl as gl
 from pyqtgraph.Qt import QtCore, QtWidgets
 
-# ---- Boost pad positions from RocketSim (no fallback) ----
+import os
 import RocketSim as _rs
+
+_mesh_path = os.path.join(os.path.dirname(__file__), "collision_meshes")
+if os.path.exists(_mesh_path):
+    try:
+        _rs.init(_mesh_path)
+    except Exception:
+        pass
+else:
+    try:
+        _rs.init()
+    except Exception:
+        pass
 
 _arena = _rs.Arena(_rs.GameMode.SOCCAR)
 _pads = _arena.get_boost_pads()

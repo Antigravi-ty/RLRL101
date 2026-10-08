@@ -1,5 +1,19 @@
+import os
 import numpy as np
 import RocketSim as rs
+
+# 自动定位并初始化碰撞网格
+mesh_path = os.path.join(os.path.dirname(__file__), "collision_meshes")
+if os.path.exists(mesh_path):
+    try:
+        rs.init(mesh_path)
+    except Exception:
+        pass
+else:
+    try:
+        rs.init()
+    except Exception:
+        pass
 
 DECISION_HZ = 30
 PHYSICS_HZ = 120
@@ -11,6 +25,7 @@ BALL_RADIUS = 93.0
 
 OBS_DIM = 20
 N_ACTIONS = 7
+N_INTENTS = 28
 HIDDEN_DIM = 128
 
 # (throttle, steer)

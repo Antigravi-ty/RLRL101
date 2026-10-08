@@ -11,11 +11,31 @@ calib_runner.py — RocketSim 动作标定 + 人类监督可视化
   X       标记 bad，跳到下一个
   Q/ESC   退出
 """
-import sys, os, math
+import sys, os, math, argparse, json
 import numpy as np
 import RocketSim as rs
-import pyqtgraph.opengl as gl
-from pyqtgraph.Qt import QtCore, QtWidgets
+
+# 优先初始化碰撞网格
+mesh_path = os.path.join(os.path.dirname(__file__), "collision_meshes")
+if os.path.exists(mesh_path):
+    try:
+        rs.init(mesh_path)
+    except Exception:
+        pass
+else:
+    try:
+        rs.init()
+    except Exception:
+        pass
+
+HAS_GUI = False
+try:
+    if "DISPLAY" in os.environ or sys.platform == "win32":
+        import pyqtgraph.opengl as gl
+        from pyqtgraph.Qt import QtCore, QtWidgets
+        HAS_GUI = True
+except Exception:
+    HAS_GUI = False
 
 
 # =====================================================
@@ -47,6 +67,10 @@ def decode_action(s):
             c.steer = -1.0; c.yaw = -1.0
         elif k == "D":
             c.steer = 1.0; c.yaw = 1.0
+        elif k == "Q":
+            c.roll = -1.0
+        elif k == "E":
+            c.roll = 1.0
         elif k == "jump":
             c.jump = True
         elif k == "boost":
@@ -68,45 +92,53 @@ def build_cases():
                   init={"pos": P}, seq=[("wait", 60)],
                   desc="静止基线（校对坐标系）"))
 
-    # --- Phase 1: jump tap vs hold ---
-    for hold in [1, 2, 4, 8, 12, 16, 20]:
+    # --- Phase 1: jump tap vs hold (标定升力死区与 24t 上限) ---
+    for hold in [1, 2, 3, 4, 6, 8, 12, 16, 20, 24, 28, 32]:
         C.append(dict(
-            id=f"10_jump_h{hold}", phase="jump",
+            id=f"10_jump_h{hold}", phase="jump_hold",
             init={"pos": P},
             seq=[("jump", hold), ("wait", 120)],
-            desc=f"jump hold={hold}t"))
+            desc=f"jump hold={hold}t 升力响应"))
 
-    # --- Phase 2: dodge 方向 × 速度 ---
-    dirs = {"front": "jump+W", "back": "jump+S",
-            "left": "jump+A", "right": "jump+D",
-            "fl": "jump+W+A", "fr": "jump+W+D",
-            "bl": "jump+S+A", "br": "jump+S+D"}
+    # --- Phase 1b: 二段跳 / Dodge 窗口扫描 (延迟 5 到 160 帧) ---
+    for wait_d in [5, 15, 30, 60, 90, 120, 140, 150, 160]:
+        C.append(dict(
+            id=f"15_dodge_window_w{wait_d}", phase="dodge_window",
+            init={"pos": (3000, 0, 1500)}, # 高空测纯空窗期
+            seq=[("jump", 3), ("wait", wait_d), ("jump+W", 1), ("wait", 60)],
+            desc=f"起跳后等待 {wait_d}t 执行前翻 (测试 1.25s 翻滚有效窗口)"))
+
+    # --- Phase 2: dodge 方向 × 速度 (含 empty double jump 及 8 方向) ---
+    dirs = {
+        "empty": "jump",
+        "front": "jump+W", "back": "jump+S",
+        "left": "jump+A", "right": "jump+D",
+        "fl": "jump+W+A", "fr": "jump+W+D",
+        "bl": "jump+S+A", "br": "jump+S+D"
+    }
     for dname, dkeys in dirs.items():
         for v in [0, 800, 1500]:
             C.append(dict(
                 id=f"20_dodge_{dname}_v{v}", phase="dodge_dir",
                 init={"pos": P, "vel": (v, 0, 0)},
-                seq=[("jump", 1), ("wait", 5), (dkeys, 1), ("wait", 60)],
+                seq=[("jump", 3), ("wait", 4), (dkeys, 1), ("wait", 60)],
                 desc=f"{dname} dodge v={v}"))
 
-    # --- Phase 3: flip cancel 延迟扫描 ---
-    # 前翻起手 = jump → 5t → jump+W（触发前 dodge）
-    # cancel = dodge 后 N 帧按 S 反向
-    for N in [1, 2, 3, 4, 5, 6, 8]:
+    # --- Phase 3: flip cancel 延迟扫描 (前翻后 N 帧拉 S) ---
+    for N in [1, 2, 3, 4, 5, 6, 8, 12]:
         C.append(dict(
             id=f"30_cancel_front_N{N}", phase="flip_cancel",
             init={"pos": P},
-            seq=[("jump", 1), ("wait", 5), ("jump+W", 1),
+            seq=[("jump", 3), ("wait", 4), ("jump+W", 1),
                  ("wait", N), ("S", 40)],
-            desc=f"前翻 cancel delay={N}t"))
+            desc=f"前翻 cancel delay={N}t (S 键反向锁止俯仰)"))
 
     # --- Phase 4: cancel 的 cancel ---
-    # 前翻 → N1 帧后 S cancel → N2 帧后再 W
     for tag, n1, n2 in [("A", 3, 4), ("B", 3, 8), ("C", 5, 4), ("D", 4, 6)]:
         C.append(dict(
             id=f"40_cancel2_{tag}", phase="cancel_cancel",
             init={"pos": P},
-            seq=[("jump", 1), ("wait", 5), ("jump+W", 1),
+            seq=[("jump", 3), ("wait", 4), ("jump+W", 1),
                  ("wait", n1), ("S", n2), ("wait", 20), ("W", 30)],
             desc=f"cancel 的 cancel N1={n1} N2={n2}"))
 
@@ -116,19 +148,47 @@ def build_cases():
         init={"pos": (3000, 0, 2000)},
         seq=[("wait", 240)],
         desc="自由落体 z=2000（测重力）"))
-    C.append(dict(
-        id="51_freefall_vx500", phase="gravity",
-        init={"pos": (3000, 0, 2000), "vel": (500, 0, 0)},
-        seq=[("wait", 240)],
-        desc="自由落体 + vx=500"))
 
     # --- Phase 6: boost 加速 + dodge ---
     C.append(dict(
         id="60_boost_then_dodge", phase="boost_dodge",
         init={"pos": P},
-        seq=[("boost+W", 40), ("jump", 1), ("wait", 5),
+        seq=[("boost+W", 40), ("jump", 3), ("wait", 4),
              ("jump+W+boost", 1), ("wait", 60)],
         desc="boost 加速 → 前翻（含 boost）"))
+
+    # --- Phase 7: 纯键盘高级特技操作 (Speed Flip / Wave Dash / Half Flip) ---
+    # Speed Flip Left: 微右摆 2t -> 跳 3t -> 空 3t -> 左斜翻 (W+A+jump) 1t -> 瞬时拉 S+E cancel 30t -> 手刹落地 15t
+    C.append(dict(
+        id="70_speed_flip_left", phase="advanced_speed_flip",
+        init={"pos": P},
+        seq=[("boost+W+D", 2), ("boost+W+jump", 3), ("boost+W", 3),
+             ("boost+W+A+jump", 1), ("boost+S+E+hb", 30), ("boost+W+hb", 20)],
+        desc="Speed Flip Left (纯键盘斜翻 + S Cancel + E 滚转 + 全程 Boost)"))
+
+    # Speed Flip Right: 微左摆 2t -> 跳 3t -> 空 3t -> 右斜翻 (W+D+jump) 1t -> 瞬时拉 S+Q cancel 30t -> 手刹落地 15t
+    C.append(dict(
+        id="71_speed_flip_right", phase="advanced_speed_flip",
+        init={"pos": P},
+        seq=[("boost+W+A", 2), ("boost+W+jump", 3), ("boost+W", 3),
+             ("boost+W+D+jump", 1), ("boost+S+Q+hb", 30), ("boost+W+hb", 20)],
+        desc="Speed Flip Right (纯键盘斜翻 + S Cancel + Q 滚转 + 全程 Boost)"))
+
+    # Wave Dash Front: 小跳 3t -> 仰头 8t -> 下落滞空 12t -> 触地前翻拍地 1t -> 落地滑行 15t
+    C.append(dict(
+        id="72_wavedash_front", phase="advanced_wavedash",
+        init={"pos": P},
+        seq=[("jump+W", 3), ("S", 8), ("wait", 12),
+             ("jump+W+hb", 1), ("W+hb", 20)],
+        desc="Wave Dash Front (前向压头拍地爆发加速)"))
+
+    # Half Flip: 倒车起步 -> 后翻起跳 -> 半程拉 W cancel -> 空中 roll E 翻正
+    C.append(dict(
+        id="73_half_flip", phase="advanced_half_flip",
+        init={"pos": P},
+        seq=[("S", 20), ("jump+S", 3), ("S", 3), ("jump+S", 1),
+             ("S", 12), ("W+E+hb", 25), ("W+hb", 20)],
+        desc="Half Flip (倒车后翻 180° Cancel 调头)"))
 
     return C
 
@@ -233,9 +293,16 @@ class Runner:
 
 
 # =====================================================
-# 可视化
+# 可视化 (GUI 组件基类适配)
 # =====================================================
-class CalibView(gl.GLViewWidget):
+if HAS_GUI:
+    _BaseView = gl.GLViewWidget
+else:
+    class _BaseView:
+        def __init__(self, *args, **kwargs):
+            pass
+
+class CalibView(_BaseView):
     def __init__(self, runner):
         super().__init__()
         self.runner = runner
@@ -464,12 +531,86 @@ class CalibView(gl.GLViewWidget):
 
 
 # =====================================================
-# 主程序
+# 无头模式批量执行与数据统计
+# =====================================================
+def run_headless(cases, output_dir="calib_out"):
+    os.makedirs(output_dir, exist_ok=True)
+    runner = Runner(cases)
+    summary_data = []
+
+    print("\n" + "=" * 90)
+    print(" RocketSim 物理动作标定 (Headless Mode) - 执行中...")
+    print("=" * 90)
+    print(f"{'Case ID':<26} | {'Phase':<16} | {'Max Z':>7} | {'Max Spd':>7} | {'Pitch':>6} | {'Air Ticks':>9} | 描述")
+    print("-" * 90)
+
+    for i in range(len(cases)):
+        runner.load_case(i)
+        case = cases[i]
+        cid = case["id"]
+        phase = case["phase"]
+
+        while runner.phase == "running":
+            runner.tick()
+
+        # 计算该 Case 的统计特征
+        max_z = max(fr["pos"][2] for fr in runner.frames) if runner.frames else 0.0
+        max_spd = max(math.hypot(fr["vel"][0], fr["vel"][1], fr["vel"][2]) for fr in runner.frames) if runner.frames else 0.0
+        last_fr = runner.frames[-1] if runner.frames else None
+
+        # 计算俯仰角
+        final_pitch = 0.0
+        if last_fr:
+            cs = runner.car.get_state()
+            fwd = runner.car.get_forward_dir()
+            final_pitch = math.degrees(math.atan2(fwd.z, math.hypot(fwd.x, fwd.y)))
+
+        air_ticks = sum(1 for fr in runner.frames if not fr["on_ground"])
+        desc = case.get("desc", "")
+
+        print(f"{cid:<26} | {phase:<16} | {max_z:7.1f} | {max_spd:7.1f} | {final_pitch:6.1f}° | {air_ticks:9d} | {desc}")
+
+        summary_data.append({
+            "id": cid,
+            "phase": phase,
+            "desc": desc,
+            "ticks": len(runner.frames),
+            "max_z": round(max_z, 2),
+            "max_speed": round(max_spd, 2),
+            "final_pitch_deg": round(final_pitch, 2),
+            "air_ticks": air_ticks,
+        })
+
+    summary_file = os.path.join(output_dir, "calibration_summary.json")
+    with open(summary_file, "w", encoding="utf-8") as f:
+        json.dump(summary_data, f, indent=2, ensure_ascii=False)
+
+    print("=" * 90)
+    print(f"✓ 全部 {len(cases)} 个标定测试执行完毕！")
+    print(f"✓ 逐帧遥测数据已存入: {output_dir}/*.csv")
+    print(f"✓ 汇总统计报告已保存: {summary_file}\n")
+    return summary_data
+
+
+# =====================================================
+# 主程序入口
 # =====================================================
 def main():
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    parser = argparse.ArgumentParser(description="RocketSim 动作标定工具")
+    parser.add_argument("--headless", action="store_true", help="无头模式（不启动 GUI，直接输出数据与 CSV）")
+    parser.add_argument("--out", default="calib_out", help="数据输出目录")
+    args, _ = parser.parse_known_args()
 
     cases = build_cases()
+
+    if args.headless or not HAS_GUI:
+        if not HAS_GUI and not args.headless:
+            print("[cali.py] 检测到无图形环境，自动切换到 Headless 模式运行。")
+        run_headless(cases, output_dir=args.out)
+        return
+
+    # 具备 GUI 运行环境
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
     runner = Runner(cases)
     runner.load_case(0)
 
@@ -485,7 +626,7 @@ def main():
 
     timer = QtCore.QTimer()
     timer.timeout.connect(tick)
-    timer.start(8)   # ~125Hz，与物理 120Hz 接近
+    timer.start(8)
 
     sys.exit(app.exec_())
 

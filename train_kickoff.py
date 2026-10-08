@@ -11,7 +11,7 @@ from kickoff_common import (
     TICKS_PER_DECISION, MAX_DECISIONS, TOUCH_DIST,
     build_obs,
 )
-from action_abstraction import ActionAbstractionLayer, Intent, NUM_INTENTS
+from action_abstraction import ActionAbstractionLayer, Intent, NUM_INTENTS, KICKOFF_INTENTS
 
 SEED = int(os.environ.get("SEED", "0"))
 random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
@@ -23,15 +23,35 @@ BUFFER_CAP = 300_000
 EPS_START_FRESH = 1.0
 EPS_START_RESUME = 0.3
 EPS_END = 0.05
-EPS_DECAY_PER_EP = 0.9997
 TARGET_UPDATE = 500
 GRAD_CLIP = 10.0
 TRAIN_EVERY = 8
 TRAIN_EPISODES = int(os.environ.get("TRAIN_EPISODES", "200_000"))
+if "EPS_DECAY_PER_EP" in os.environ:
+    EPS_DECAY_PER_EP = float(os.environ["EPS_DECAY_PER_EP"])
+elif TRAIN_EPISODES <= 5000:
+    EPS_DECAY_PER_EP = (EPS_END / EPS_START_FRESH) ** (1.0 / max(1, int(TRAIN_EPISODES * 0.75)))
+else:
+    EPS_DECAY_PER_EP = 0.9997
 PRINT_EVERY = int(os.environ.get("PRINT_EVERY", "200"))
 USE_ABSTRACTION = os.environ.get("USE_ABSTRACTION", "1") == "1"
 
-CKPT_DIR = "./checkpoints"
+# 支持通过环境变量 N_ACTIONS 或命令行参数覆盖动作维度
+parser = argparse.ArgumentParser(add_help=False)
+parser.add_argument("--n_actions", type=int, default=None)
+args, _ = parser.parse_known_args()
+
+env_n_actions = os.environ.get("N_ACTIONS")
+if args.n_actions is not None:
+    ACT_DIM = args.n_actions
+elif env_n_actions is not None:
+    ACT_DIM = int(env_n_actions)
+elif USE_ABSTRACTION:
+    ACT_DIM = len(KICKOFF_INTENTS)
+else:
+    ACT_DIM = N_ACTIONS
+
+CKPT_DIR = "./checkpoints" 
 os.makedirs(CKPT_DIR, exist_ok=True)
 CKPT_LATEST = os.path.join(CKPT_DIR, "kickoff_latest.pt")
 CKPT_BEST   = os.path.join(CKPT_DIR, "kickoff_best.pt")
@@ -40,7 +60,7 @@ RESUME = os.environ.get("RESUME", "0") == "1"
 
 
 class QNet(nn.Module):
-    def __init__(self, action_dim=NUM_INTENTS if USE_ABSTRACTION else N_ACTIONS):
+    def __init__(self, action_dim=ACT_DIM):
         super().__init__()
         self.action_dim = action_dim
         self.net = nn.Sequential(
@@ -71,7 +91,7 @@ class ReplayBuffer:
         return len(self.buf)
 
 
-def save_ckpt(path, q_net, episode, n_actions=NUM_INTENTS if USE_ABSTRACTION else N_ACTIONS, note=""):
+def save_ckpt(path, q_net, episode, n_actions=ACT_DIM, note=""):
     torch.save({
         "state_dict": q_net.state_dict(),
         "obs_dim": OBS_DIM,
@@ -86,8 +106,16 @@ def main():
     arena = rs.Arena(rs.GameMode.SOCCAR)
     car = arena.add_car(rs.Team.BLUE, rs.CarConfig.OCTANE)
 
-    act_dim = NUM_INTENTS if USE_ABSTRACTION else N_ACTIONS
+    act_dim = ACT_DIM
     action_layer = ActionAbstractionLayer(TICKS_PER_DECISION) if USE_ABSTRACTION else None
+
+    if USE_ABSTRACTION:
+        if act_dim == len(KICKOFF_INTENTS):
+            action_to_intent = [int(i) for i in KICKOFF_INTENTS]
+            intent_to_action = {int(intent): i for i, intent in enumerate(KICKOFF_INTENTS)}
+        else:
+            action_to_intent = [i for i in range(act_dim)]
+            intent_to_action = {i: i for i in range(act_dim)}
 
     q_net = QNet(act_dim)
     if RESUME and os.path.exists(CKPT_LATEST):
@@ -131,7 +159,7 @@ def main():
         for step in range(MAX_DECISIONS):
             if USE_ABSTRACTION:
                 if action_layer.is_executing_macro:
-                    a_idx = int(action_layer.current_intent)
+                    a_idx = intent_to_action.get(int(action_layer.current_intent), 0)
                     action_layer.step(arena, car)
                 else:
                     if random.random() < epsilon:
@@ -140,7 +168,7 @@ def main():
                         with torch.no_grad():
                             q = q_net(torch.tensor(obs, dtype=torch.float32))
                             a_idx = int(q.argmax().item())
-                    action_layer.step(arena, car, a_idx)
+                    action_layer.step(arena, car, action_to_intent[a_idx])
             else:
                 if random.random() < epsilon:
                     a_idx = random.randrange(N_ACTIONS)
@@ -180,7 +208,7 @@ def main():
                 r += 0.01
 
             up = car.get_up_dir()
-            if up.z < 0.2:
+            if cs.is_on_ground and up.z < 0.2:
                 r -= 1.0
                 done = True
 
@@ -239,13 +267,13 @@ def main():
 
             if tr > 0.9 and mean_t > 0 and mean_t < best_mean_time:
                 best_mean_time = mean_t
-                save_ckpt(CKPT_BEST, q_net, episode, note=f"best mean_t={mean_t:.1f}")
+                save_ckpt(CKPT_BEST, q_net, episode, n_actions=act_dim, note=f"best mean_t={mean_t:.1f}")
                 print(f"  [ckpt] new best (mean_touch_step={mean_t:.1f})")
 
         if episode % 50 == 0:
-            save_ckpt(CKPT_LATEST, q_net, episode)
+            save_ckpt(CKPT_LATEST, q_net, episode, n_actions=act_dim)
 
-    save_ckpt(CKPT_LATEST, q_net, TRAIN_EPISODES, note="final")
+    save_ckpt(CKPT_LATEST, q_net, TRAIN_EPISODES, n_actions=act_dim, note="final")
 
 
 if __name__ == "__main__":

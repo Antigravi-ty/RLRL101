@@ -13,6 +13,7 @@
    - [1.3 二段跳最小安全释放间隔（Min Release Delay）与刮地分析](#13-二段跳最小安全释放间隔min-release-delay与刮地分析)
    - [1.4 Dodge 速度加成冲量与 2300 uu/s 截断](#14-dodge-速度加成冲量与-2300-uus-截断)
    - [1.5 Flip Cancel 反向俯仰锁止标定](#15-flip-cancel-反向俯仰锁止标定)
+   - [1.6 Dodge 宏动态条件终止标定（基于 is_flipping 状态跃迁）](#16-dodge-宏动态条件终止标定基于-is_flipping-状态跃迁)
 2. [纯键盘模式约束与按键物理绑定规范](#2-纯键盘模式约束与按键物理绑定规范)
 3. [动作抽象转移层（Action Abstraction Layer）架构设计](#3-动作抽象转移层action-abstraction-layer架构设计)
    - [3.1 为什么必须建立意图抽象层？](#31-为什么必须建立意图抽象层)
@@ -110,6 +111,32 @@ RocketSim 运行在 120Hz 物理帧率（1 tick = 8.333 ms），RL 决策层运�
 | **无 Cancel** | +22.3° (转完 360°) | -89.9° (曾朝天倒立) | 完整 360° 翻滚，中途倒立时无法持续 Boost |
 
 **结论**：在纯键盘模式下，**$N \in [2, 4]$ 帧内拉住 S 键**可达到最平稳的 Flip Cancel 姿态锁止。
+
+---
+
+### 1.6 Dodge 宏动态条件终止标定（基于 is_flipping 状态跃迁）
+
+在原有时序中，所有 Dodge 类宏采用固定 45 帧尾部延时（总计 52 ticks），导致宏在车辆仍在空中翻转（`is_flipping == 1`）时被提前交回控制权，引发 RL Agent 接收到非法的半翻转状态。
+
+现已重构 Dodge 宏终止逻辑为**物理状态自适应条件终止**：
+1. **终止条件**：严格在 `is_flipping` 由 1 变 0 的瞬时自动结束宏并将控制权交还 RL；
+2. **起跳保护**：以“曾经进入过 `is_flipping == 1`”作为必要前置条件，避免起跳（1st jump + suspension release）阶段误判；
+3. **安全阀**：设置 200 ticks 硬上限作为安全兜底。
+
+经 `python3 test_macro.py` 实测，8 个 Dodge 意图全部符合预期指标：
+
+| 宏意图 (Macro Intent) | 执行帧数 (Ticks) | 终止翻转状态 (Flip) | 终止接地 (Ground) | 最低离地高度 (Min Z) | 空间位移 $\Delta X, \Delta Y$ (uu) | 峰值速度 (uu/s) |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| `DODGE_FRONT` | 86 | **0** | 0 | 19.5 | (+329.2, -21.2) | 617.9 |
+| `DODGE_BACK` | 86 | **0** | 0 | 19.5 | (-320.2, -4.6) | 566.7 |
+| `DODGE_LEFT` | 86 | **0** | 0 | 19.5 | (+37.4, -339.4) | 580.5 |
+| `DODGE_RIGHT` | 86 | **0** | 0 | 19.5 | (+37.4, +339.4) | 580.5 |
+| `DODGE_FRONT_LEFT` | 86 | **0** | 0 | 19.5 | (+214.9, -243.0) | 609.0 |
+| `DODGE_FRONT_RIGHT` | 86 | **0** | 0 | 19.5 | (+214.9, +243.0) | 609.0 |
+| `DODGE_BACK_LEFT` | 86 | **0** | 0 | 19.5 | (-196.7, -241.0) | 562.7 |
+| `DODGE_BACK_RIGHT` | 86 | **0** | 0 | 19.5 | (-196.7, +241.0) | 562.7 |
+
+所有 8 种 Dodge 均在第 86 帧翻转结束那一刻精准截断，轮胎朝下，姿态恢复稳定下落状态。
 
 ---
 
@@ -237,6 +264,19 @@ class Intent(IntEnum):
 
 ## 5. 模型训练与开球加速优化（train_kickoff.py）
 
+### 5.1 开球专用意图子集 (KICKOFF_INTENTS) 与 N_ACTIONS 动态覆盖
+为了加快开球 Kickoff 策略在低样本下的收敛速度，导出了专注开球核心动作的 7 意图子集：
+- `IDLE` (0)
+- `BOOST_FORWARD` (7)
+- `JUMP_TAP` (12)
+- `JUMP_HOLD` (13)
+- `DODGE_FRONT` (15)
+- `DODGE_FRONT_LEFT` (19)
+- `DODGE_FRONT_RIGHT` (20)
+
+`train_kickoff.py` 支持通过环境变量 `N_ACTIONS` 或命令行参数覆盖动作维度（使用动作抽象层时默认自动设置为 7 维），将 Q 网络的动作输出头压缩至 7 维，大幅加速收敛。
+
+### 5.2 状态观测与奖励设计
 在 `train_kickoff.py` 中，强化学习系统已完全集成动作抽象层：
 
 1. **状态观测（Obs Dim = 20）**：
@@ -264,14 +304,15 @@ python3 cali.py --headless
 python3 cali.py
 ```
 
-### 6.2 强化学习开球训练
-在本地或服务器启动训练（默认启用动作抽象层）：
+### 6.2 宏验证与强化学习训练
+验证宏物理时序与条件终止效果：
 ```bash
-# 本地测试跑一轮/数轮快速验证（一轮游不报错）
-TRAIN_EPISODES=5 PRINT_EVERY=1 python3 train_kickoff.py
+python3 test_macro.py
+```
 
-# 本地多核全速正式训练
-TRAIN_EPISODES=200000 PRINT_EVERY=200 python3 train_kickoff.py
+启动 7 意图子集抽象层开球训练 Baseline：
+```bash
+USE_ABSTRACTION=1 TRAIN_EPISODES=2000 PRINT_EVERY=100 python3 train_kickoff.py
 ```
 若需要对照训练原始的 7 动作地面基线：
 ```bash

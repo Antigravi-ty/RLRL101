@@ -8,7 +8,7 @@ from kickoff_common import (
     TICKS_PER_DECISION, MAX_DECISIONS, TOUCH_DIST,
     build_obs,
 )
-from action_abstraction import ActionAbstractionLayer, NUM_INTENTS
+from action_abstraction import ActionAbstractionLayer, NUM_INTENTS, KICKOFF_INTENTS
 
 CKPT_LATEST = "./checkpoints/kickoff_latest.pt"
 VIS_ADDR = ("127.0.0.1", 9999)
@@ -66,7 +66,7 @@ def main():
             new_net, ep, n_act = load_latest()
             if new_net is not None:
                 net, cur_ep = new_net, ep
-                action_layer = ActionAbstractionLayer(TICKS_PER_DECISION) if n_act == NUM_INTENTS else None
+                action_layer = ActionAbstractionLayer(TICKS_PER_DECISION) if n_act in (NUM_INTENTS, len(KICKOFF_INTENTS)) else None
                 print(f"[vis] loaded ckpt episode={cur_ep} (actions={n_act})")
 
         arena.reset_kickoff()
@@ -91,7 +91,7 @@ def main():
                 if action_layer.is_executing_macro:
                     action_layer.step(arena, car)
                 else:
-                    action_layer.step(arena, car, a_idx)
+                    action_layer.step(arena, car, int(KICKOFF_INTENTS[a_idx]) if n_act == len(KICKOFF_INTENTS) else a_idx)
                 ctrl = car.get_state().last_controls
             else:
                 thr, st = ACTIONS[a_idx]

@@ -24,6 +24,7 @@ action_abstraction.py — Rocket League 纯键盘动作抽象层与宏动作控�
 from enum import IntEnum
 from typing import List, Tuple, Optional
 import math
+import sys
 import numpy as np
 import RocketSim as rs
 
@@ -66,6 +67,105 @@ class Intent(IntEnum):
 
 INTENT_NAMES = {intent: intent.name for intent in Intent}
 NUM_INTENTS = len(Intent)
+
+IDLE = Intent.IDLE
+FORWARD = Intent.FORWARD
+FORWARD_LEFT = Intent.FORWARD_LEFT
+FORWARD_RIGHT = Intent.FORWARD_RIGHT
+REVERSE = Intent.REVERSE
+REVERSE_LEFT = Intent.REVERSE_LEFT
+REVERSE_RIGHT = Intent.REVERSE_RIGHT
+BOOST_FORWARD = Intent.BOOST_FORWARD
+BOOST_LEFT = Intent.BOOST_LEFT
+BOOST_RIGHT = Intent.BOOST_RIGHT
+DRIFT_LEFT = Intent.DRIFT_LEFT
+DRIFT_RIGHT = Intent.DRIFT_RIGHT
+JUMP_TAP = Intent.JUMP_TAP
+JUMP_HOLD = Intent.JUMP_HOLD
+DOUBLE_JUMP = Intent.DOUBLE_JUMP
+DODGE_FRONT = Intent.DODGE_FRONT
+DODGE_BACK = Intent.DODGE_BACK
+DODGE_LEFT = Intent.DODGE_LEFT
+DODGE_RIGHT = Intent.DODGE_RIGHT
+DODGE_FRONT_LEFT = Intent.DODGE_FRONT_LEFT
+DODGE_FRONT_RIGHT = Intent.DODGE_FRONT_RIGHT
+DODGE_BACK_LEFT = Intent.DODGE_BACK_LEFT
+DODGE_BACK_RIGHT = Intent.DODGE_BACK_RIGHT
+FLIP_CANCEL_FRONT = Intent.FLIP_CANCEL_FRONT
+SPEED_FLIP_LEFT = Intent.SPEED_FLIP_LEFT
+SPEED_FLIP_RIGHT = Intent.SPEED_FLIP_RIGHT
+WAVEDASH_FRONT = Intent.WAVEDASH_FRONT
+HALF_FLIP = Intent.HALF_FLIP
+
+DODGE_INTENTS = {
+    Intent.DODGE_FRONT,
+    Intent.DODGE_BACK,
+    Intent.DODGE_LEFT,
+    Intent.DODGE_RIGHT,
+    Intent.DODGE_FRONT_LEFT,
+    Intent.DODGE_FRONT_RIGHT,
+    Intent.DODGE_BACK_LEFT,
+    Intent.DODGE_BACK_RIGHT,
+}
+
+KICKOFF_INTENTS = [
+    Intent.IDLE,
+    Intent.BOOST_FORWARD,
+    Intent.JUMP_TAP,
+    Intent.JUMP_HOLD,
+    Intent.DODGE_FRONT,
+    Intent.DODGE_FRONT_LEFT,
+    Intent.DODGE_FRONT_RIGHT,
+]
+
+
+class SmartControlList(list):
+    """
+    智能控制指令序列，支持基于车辆物理状态的动态条件终止（如 Dodge 翻转结束检测）。
+    """
+    def __init__(self, controls, is_dodge: bool = False):
+        super().__init__(controls)
+        self.is_dodge = is_dodge
+
+    def __iter__(self):
+        return SmartControlIter(self)
+
+
+class SmartControlIter:
+    def __init__(self, smart_list: SmartControlList):
+        self.smart_list = smart_list
+        self.idx = 0
+        self.has_flipped = False
+
+    def __next__(self) -> rs.CarControls:
+        frame = sys._getframe(1)
+        car = None
+        curr = frame
+        while curr:
+            if "car" in curr.f_locals and isinstance(curr.f_locals["car"], rs.Car):
+                car = curr.f_locals["car"]
+                break
+            curr = curr.f_back
+
+        if car is not None and self.smart_list.is_dodge:
+            try:
+                s = car.get_state()
+                if s.is_flipping:
+                    self.has_flipped = True
+                elif self.has_flipped and not s.is_flipping:
+                    del self.smart_list[self.idx:]
+                    raise StopIteration
+            except StopIteration:
+                raise
+            except Exception:
+                pass
+
+        if self.idx >= len(self.smart_list):
+            raise StopIteration
+
+        item = self.smart_list[self.idx]
+        self.idx += 1
+        return item
 
 
 def make_ctrl(
@@ -171,13 +271,14 @@ class MacroSequencer:
         hold_ticks: int = 3,
         wait_ticks: int = 3,
         boost_in_dodge: bool = False,
+        max_ticks: int = 200,
     ) -> List[rs.CarControls]:
         """
         标准 8 方向 Dodge:
         1. 起跳 hold_ticks (通常 3 ticks)
         2. 松开 jump 等待 wait_ticks (使悬挂完全分离, >=3 ticks)
         3. 对应方向键 + jump 触发 dodge
-        4. 空中中立/微调并手刹落地
+        4. 保持惯性完成翻滚直至 is_flipping 结束 (安全阀上限 max_ticks 约 200 ticks) 并落地手刹
         """
         seq = []
         # 1. 1st jump
@@ -202,11 +303,12 @@ class MacroSequencer:
         trig_ctrl = keys_to_ctrl(**trig, boost=boost_in_dodge)
         seq.append(trig_ctrl)
 
-        # 4. 保持惯性完成翻滚 (约 40-50 ticks) 并落地手刹
-        for _ in range(45):
+        # 4. 保持惯性完成翻滚直至 is_flipping 结束 (安全阀硬上限 max_ticks)
+        remaining = max(0, max_ticks - len(seq))
+        for _ in range(remaining):
             seq.append(keys_to_ctrl(shift=True, boost=boost_in_dodge and d_name in ("fl", "fr")))
 
-        return seq
+        return SmartControlList(seq, is_dodge=True)
 
     @staticmethod
     def generate_flip_cancel_front(hold_ticks: int = 3, wait_ticks: int = 3, cancel_delay: int = 3) -> List[rs.CarControls]:
@@ -340,16 +442,19 @@ class ActionAbstractionLayer:
         self.active_macro_queue: List[rs.CarControls] = []
         self.current_intent: Intent = Intent.IDLE
         self.is_executing_macro = False
+        self.has_flipped = False
 
     def reset(self):
         self.active_macro_queue.clear()
         self.current_intent = Intent.IDLE
         self.is_executing_macro = False
+        self.has_flipped = False
 
     def parse_intent(self, intent_idx: int) -> List[rs.CarControls]:
         """将 Intent 转化为接下来所需执行的按键控制列表"""
         intent = Intent(intent_idx)
         self.current_intent = intent
+        self.has_flipped = False
 
         # 1. 地面基础移动 (单步持续 ticks_per_decision 帧)
         if intent == Intent.IDLE:
@@ -427,15 +532,27 @@ class ActionAbstractionLayer:
                 intent_idx = int(Intent.IDLE)
             controls = self.parse_intent(intent_idx)
             self.active_macro_queue.extend(controls)
+            self.has_flipped = False
 
         # 按照 TICKS_PER_DECISION 或宏完成情况步进
         executed_ticks = 0
         limit = min(self.ticks_per_decision, len(self.active_macro_queue))
+        is_dodge = self.current_intent in DODGE_INTENTS
+
         for _ in range(limit):
             ctrl = self.active_macro_queue.pop(0)
             car.set_controls(ctrl)
             arena.step(1)
             executed_ticks += 1
+
+            if is_dodge:
+                s = car.get_state()
+                if s.is_flipping:
+                    self.has_flipped = True
+                elif self.has_flipped and not s.is_flipping:
+                    # 翻转结束：终止宏
+                    self.active_macro_queue.clear()
+                    break
 
         self.is_executing_macro = len(self.active_macro_queue) > 0
         return executed_ticks

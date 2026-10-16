@@ -127,10 +127,7 @@ def main():
     buffer = RolloutBuffer(args.rollout_steps, OBS_V3_DIM, action_channels=len(PPO_ACTION_DIMS))
 
     max_ep_decisions = MAX_DECISIONS_STAGE0
-    cfg = RewardConfig(
-        max_decisions=max_ep_decisions,
-        target_cpa_bonus=120.0 if args.mode in ("target", "stage1") else 0.0,
-    )
+    cfg = RewardConfig(max_decisions=max_ep_decisions)
 
     tracker = BestTracker(
         save_path=best_save_path,
@@ -142,7 +139,7 @@ def main():
 
     touch_history = deque(maxlen=500)
     time_history  = deque(maxlen=500)
-    gvel_history  = deque(maxlen=500)
+    spd_history   = deque(maxlen=500)
     rew_history   = deque(maxlen=200)
 
     fps_t0 = time.time(); fps_dec = 0
@@ -171,14 +168,11 @@ def main():
             env.reset()
             obs_v3 = env.last_obs_v3
             prev_snap = env.snapshot()
-            min_dist = prev_snap["dist"]
-            peak_closing = 0.0
-            closing_accum = 0.0
 
             ep_reward = 0.0
             touched = False
             touched_at = float(max_ep_decisions)
-            touch_gvel = 0.0
+            touch_car_speed = 0.0
             done = False
             step = 0
             ep_ticks = 0
@@ -196,11 +190,9 @@ def main():
 
                 ctrl = multi_discrete_to_controls(act_np)
                 ticks_run = 0
-                wasted_ticks = 0.0
-                boost_used_step = 0.0
+                pre_touch_speed = prev_snap["car_speed"]
                 for _ in range(TICKS_PER_DECISION):
-                    wasted_ticks += float(env.step_with_waste_check(ctrl))
-                    boost_used_step += float(getattr(env, "last_boost_used", 0.0))
+                    pre_touch_speed = env.step_tick(ctrl)
                     ticks_run += 1
                     if env._touched:
                         break
@@ -212,21 +204,10 @@ def main():
                 touched_now = snap["touched"]
                 timeout_now = (step == max_ep_decisions) and not touched_now
 
-                cpa_dist_val = None
-                cpa_time_err_val = 0.0
                 if touched_now and POST_TOUCH_STEPS > 0:
                     for _ in range(POST_TOUCH_STEPS * TICKS_PER_DECISION):
                         env.car.set_controls(ctrl)
                         arena.step(1)
-                    snap_post = env.snapshot()
-                    best_gvel = max(snap["ball_vel_to_goal"], snap_post["ball_vel_to_goal"])
-                    snap["ball_vel_to_goal"] = best_gvel
-                    touch_gvel = best_gvel
-                elif touched_now:
-                    touch_gvel = snap["ball_vel_to_goal"]
-
-                if touched_now and cfg.target_cpa_bonus > 0.0:
-                    cpa_dist_val, _, cpa_time_err_val = env.evaluate_shot_cpa()
 
                 next_obs_v3, _, _ = build_obs_v3(
                     env.car, arena,
@@ -236,28 +217,17 @@ def main():
                 exact_step = ep_ticks / float(TICKS_PER_DECISION)
                 r, detail = compute_step_reward(
                     cfg,
-                    prev_dist=prev_snap["dist"], new_dist=snap["dist"],
-                    step=exact_step,
-                    touched=touched_now, timeout=timeout_now,
-                    air_time=snap["air_time"], align=snap["align"],
-                    prev_dist_h=prev_snap["dist_h"], new_dist_h=snap["dist_h"],
-                    closing=snap["closing"],
-                    peak_closing=peak_closing, closing_accum=closing_accum,
-                    ball_vel_to_goal=snap["ball_vel_to_goal"],
+                    prev_dist=prev_snap["dist"],
+                    new_dist=snap["dist"],
+                    car_speed=pre_touch_speed,
+                    touched=touched_now,
+                    timeout=timeout_now,
                     ticks_elapsed=ticks_run,
-                    boost_wasted_ticks=wasted_ticks,
-                    boost_used=boost_used_step,
-                    min_dist=min_dist,
-                    cpa_dist=cpa_dist_val,
-                    cpa_time_err=cpa_time_err_val,
                 )
-                min_dist      = detail["min_dist"]
-                peak_closing  = detail["peak_closing"]
-                closing_accum = detail["closing_accum"]
                 ep_reward += r
 
                 if touched_now:
-                    done = True; touched = True; touched_at = exact_step; done_touch += 1
+                    done = True; touched = True; touched_at = exact_step; touch_car_speed = pre_touch_speed; done_touch += 1
                 elif timeout_now:
                     done = True; done_timeout += 1
 
@@ -298,7 +268,7 @@ def main():
             rew_history.append(ep_reward)
             if touched:
                 time_history.append(touched_at)
-                gvel_history.append(touch_gvel)
+                spd_history.append(touch_car_speed)
 
             PRINT_EVERY = int(os.environ.get("PRINT_EVERY", "50" if episode <= 500 else "200"))
 
@@ -310,13 +280,13 @@ def main():
             if episode % PRINT_EVERY == 0:
                 tr = sum(touch_history) / max(len(touch_history), 1)
                 mean_t = (sum(time_history) / max(len(time_history), 1)) if time_history else 0.0
-                mean_gv = (sum(gvel_history) / max(len(gvel_history), 1)) if gvel_history else 0.0
+                mean_spd = (sum(spd_history) / max(len(spd_history), 1)) if spd_history else 0.0
                 mean_r = sum(rew_history) / max(len(rew_history), 1)
                 now = time.time()
                 dec_fps = fps_dec / max(now - fps_t0, 1e-6)
                 kl_str = f"kl={last_ppo_stats.get('approx_kl', 0.0):.4f} ev={last_ppo_stats.get('explained_var', 0.0):+.2f}" if last_ppo_stats else "upd=0"
                 print(f"Ep {episode:6d} upd={ppo_updates_count:4d} touch={tr:6.2%} "
-                      f"step={mean_t:5.1f}({mean_t*4:3.0f}f) gvel={mean_gv:5.0f} r={mean_r:6.2f} "
+                      f"step={mean_t:5.1f}({mean_t*4:3.0f}f) spd={mean_spd:5.0f} r={mean_r:6.2f} "
                       f"fps={dec_fps:5.0f} | {kl_str} lr={lr_now:.2e} | "
                       f"tk={done_touch} to={done_timeout}{eval_line}")
                 done_touch = done_timeout = 0

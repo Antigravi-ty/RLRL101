@@ -23,9 +23,6 @@ class BallReachEnv:
         self.spawn_id = "0000"
         self.target_pos = None
         self.target_time = None
-        self._shadow_arena = rs.Arena(rs.GameMode.SOCCAR)
-        self._shadow_car = self._shadow_arena.add_car(rs.Team.BLUE, rs.CarConfig.OCTANE)
-        self._ball_sim_arena = rs.Arena(rs.GameMode.SOCCAR)
 
     def _compute_spawn_id(self, sd):
         key_str = (
@@ -67,9 +64,6 @@ class BallReachEnv:
     def _apply_spawn_state(self, sd):
         self.arena.remove_car(self.car)
         self.car = self.arena.add_car(rs.Team.BLUE, rs.CarConfig.OCTANE)
-        while self._shadow_car.id < self.car.id:
-            self._shadow_arena.remove_car(self._shadow_car)
-            self._shadow_car = self._shadow_arena.add_car(rs.Team.BLUE, rs.CarConfig.OCTANE)
         self._touched = False
         self._reset_boost_pads()
 
@@ -98,56 +92,13 @@ class BallReachEnv:
         self.target_time = sd.get("target_time")
         self.spawn_id = sd.get("spawn_id") or self._compute_spawn_id(sd)
 
-    def step_with_waste_check(self, ctrl):
+    def step_tick(self, ctrl):
         cs_before = self.car.get_state()
-        prev_boost = float(cs_before.boost)
-        v_no_vec = None
-        v_no_mag = None
-        b_no_boost = prev_boost
-        was_on_ground = bool(cs_before.is_on_ground)
-
-        if ctrl.boost and prev_boost > 0.01:
-            self.arena.clone_into(self._shadow_arena)
-            c_no = rs.CarControls()
-            c_no.throttle  = ctrl.throttle
-            c_no.steer     = ctrl.steer
-            c_no.pitch     = ctrl.pitch
-            c_no.yaw       = ctrl.yaw
-            c_no.roll      = ctrl.roll
-            c_no.jump      = ctrl.jump
-            c_no.boost     = False
-            c_no.handbrake = ctrl.handbrake
-            self._shadow_car.set_controls(c_no)
-            self._shadow_arena.step(1)
-            cf_s = self._shadow_car.get_state()
-            v_no_vec = (float(cf_s.vel.x), float(cf_s.vel.y), float(cf_s.vel.z))
-            v_no_mag = float(math.sqrt(v_no_vec[0]**2 + v_no_vec[1]**2 + v_no_vec[2]**2))
-            b_no_boost = float(cf_s.boost)
-
+        prev_spd = float(math.sqrt(cs_before.vel.x**2 + cs_before.vel.y**2 + cs_before.vel.z**2))
         self.car.set_controls(ctrl)
         self.arena.step(1)
-
-        cur_s = self.car.get_state()
-        cur_boost = float(cur_s.boost)
-        boost_used = max(0.0, prev_boost - cur_boost)
-
-        waste_ratio = 0.0
-        if v_no_vec is not None and cur_boost < b_no_boost - 1e-4:
-            vx, vy, vz = float(cur_s.vel.x), float(cur_s.vel.y), float(cur_s.vel.z)
-            v_with_mag = float(math.sqrt(vx*vx + vy*vy + vz*vz))
-            if v_with_mag >= 2290.0:
-                if was_on_ground:
-                    dv = max(0.0, v_with_mag - v_no_mag)
-                    full_dv = 8.2639
-                else:
-                    dv = max(0.0, v_with_mag - v_no_mag)
-                    full_dv = 8.8611
-                if dv < full_dv - 0.05:
-                    waste_ratio = max(0.0, min(1.0, 1.0 - (dv / full_dv)))
-
-        self.last_boost_used = boost_used
-        self.last_waste_ratio = waste_ratio
-        return waste_ratio
+        self.pre_step_car_speed = prev_spd
+        return prev_spd
 
     def reset(self, mode=None, replay_last=False, spawn_state=None):
         if spawn_state is not None:
@@ -245,39 +196,6 @@ class BallReachEnv:
         tt = float(np.clip(d_b2t / desired_avg_spd, 0.5, 2.8))
         self.target_pos = (float(tx), float(ty), float(tz))
         self.target_time = round(tt, 3)
-
-    def evaluate_shot_cpa(self, max_sim_ticks=360):
-        tgt = OPP_GOAL_POS if self.target_pos is None else np.asarray(self.target_pos, dtype=np.float32)
-        tx, ty, tz = float(tgt[0]), float(tgt[1]), float(tgt[2])
-
-        bs = self.arena.ball.get_state()
-        self._ball_sim_arena.ball.set_state(bs)
-
-        d_prev = math.sqrt((bs.pos.x - tx)**2 + (bs.pos.y - ty)**2 + (bs.pos.z - tz)**2)
-        min_d = d_prev
-        min_tick = 0
-        has_decreased = False
-
-        step_ticks = 2
-        for tick in range(step_ticks, int(max_sim_ticks) + 1, step_ticks):
-            self._ball_sim_arena.step(step_ticks)
-            b_now = self._ball_sim_arena.ball.get_state()
-            d_now = math.sqrt((b_now.pos.x - tx)**2 + (b_now.pos.y - ty)**2 + (b_now.pos.z - tz)**2)
-            if d_now < d_prev - 1e-3:
-                has_decreased = True
-                if d_now < min_d:
-                    min_d = d_now
-                    min_tick = tick
-            elif d_now > d_prev + 1e-3:
-                break
-            d_prev = d_now
-
-        if not has_decreased:
-            return float("inf"), 0.0, float(self.target_time or 0.0)
-
-        cpa_time = float(min_tick) / 120.0
-        time_err = abs(cpa_time - float(self.target_time)) if self.target_time is not None else 0.0
-        return float(min_d), cpa_time, float(time_err)
 
     def generate_stratified_stage0_batch(self, rng=None, include_target=None):
         r = rng if rng is not None else random

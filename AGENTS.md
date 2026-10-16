@@ -19,8 +19,9 @@ pip install pandas
 ### 2. 核心设计规范
 1. **首帧输入即刻释放模拟**：
    - `BallReachEnv.reset()` 生成随机场景后保持静止初始状态，无论是模型还是人类玩家，在给出第一个输入时立即开始真正的物理模拟 (`arena.step`)。
-2. **120Hz (Tuner) 与 30Hz (Trainer) 帧级奖励 100% 严格对齐 (`ticks_elapsed` + 浮点 `step`)**：
-   - `compute_step_reward` 接收 `ticks_elapsed` 与精确帧折算步数 `step = ep_ticks / 4.0`，使 30Hz 训练器与 120Hz 面板算出的 `r_cum` 分毫不差。
+2. **大道至简奖励函数 (`core/reward.py`)**：
+   - **稠密奖励**：纯帧间车球距离增量 `distance_delta_scale * (prev_dist - new_dist)`；
+   - **稀疏奖励**：时间流逝微小扣分 `-time_penalty_per_tick * ticks_elapsed`、超时扣分 `-timeout_penalty`、以及触球大加分 `touch_bonus + touch_car_speed_scale * pre_touch_car_speed`（奖励触球前一帧车辆绝对速度标量）。
 3. **6 通道键盘独立输出 (`PPO_ACTION_DIMS = [3, 3, 3, 2, 2, 2]`)**：
    - `ch0_ws` (`0=S, 1=None, 2=W`)：同时控制油门与空中俯仰 (`pitch = -throttle`)；
    - `ch1_ad` (`0=A, 1=None, 2=D`)：同时控制转向与空中偏航；

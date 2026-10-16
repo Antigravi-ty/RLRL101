@@ -348,7 +348,7 @@ class UIMixin:
             "B 切 latest/best   G 或 Shift+N 循环 prefix (自动同步训练场景 mode)\n"
             "F: FREERUN\n"
             "视图: O 切换 REWARD→OBS→FLAGS      1-8 obs 组(A-H)\n"
-            "REWARD 模式: 1 r_total  2 r_cum  3 dist  4 分项  5 全部  6 peak_cl/accum\n"
+            "REWARD 模式: 1 r_total  2 r_cum  3 dist  4 分项  5 全部  6 spd/closing\n"
             "P 切换 DELTA 模式     C 复制 HUD\n"
             "Enter 导出CSV(full)   Shift+Enter 导出CSV(compact)   Esc 退出"
         )

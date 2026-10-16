@@ -1,4 +1,3 @@
-"""reward 曲线面板。"""
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore
 
@@ -6,9 +5,9 @@ MODE_NAMES = {
     1: "r_total (每帧)",
     2: "r_cum (累计)",
     3: "dist / dist_h",
-    4: "分项 r_dist / r_align",
+    4: "分项 r_dist / r_time",
     5: "全部叠加",
-    6: "peak_closing / closing_accum",
+    6: "car_speed / closing",
 }
 
 
@@ -65,19 +64,15 @@ class RewardPlotPanel:
             self.curve_dh.setData(xs, [f["dist_h"] for f in frames])
         elif mode == 4:
             self.curve_total.setData(xs, [f["detail"].get("r_dist", 0) for f in frames])
-            self.curve_cum.setData(xs, [f["detail"].get("r_align", 0) for f in frames])
+            self.curve_cum.setData(xs, [f["detail"].get("r_time", 0) for f in frames])
         elif mode == 5:
             self.curve_total.setData(xs, [f["r_total"] for f in frames])
             self.curve_cum.setData(xs, [f["r_cum"] for f in frames])
             self.curve_dist.setData(xs, [f["dist"] for f in frames])
             self.curve_dh.setData(xs, [f["dist_h"] for f in frames])
         elif mode == 6:
-            # peak_closing：整局历史最高接近速度
-            # closing_accum：累积超速分（触球前会全部结清）
-            self.curve_total.setData(
-                xs, [f["detail"].get("peak_closing", 0) for f in frames])
-            self.curve_cum.setData(
-                xs, [f["detail"].get("closing_accum", 0) for f in frames])
+            self.curve_total.setData(xs, [f.get("car_speed", 0.0) for f in frames])
+            self.curve_cum.setData(xs, [f.get("closing", 0.0) for f in frames])
 
         self.widget.getViewBox().enableAutoRange(axis='y', enable=True)
         self.widget.getViewBox().autoRange()

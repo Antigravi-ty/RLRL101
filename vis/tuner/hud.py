@@ -1,4 +1,3 @@
-"""HUD / 状态文本格式化 (纯 PPO 6 通道概率/Value 视图 + 显式按键展示)。"""
 import numpy as np
 from core.obs_v2 import OBS_V2_GROUPS
 from .ui_constants import STATE_PLAYBACK, STATE_DONE, RECORD_LIMIT
@@ -54,8 +53,7 @@ def format_hud(session, current_boost, obs_group=None):
         up  = fr.get("up",    (0, 0, 0))
         rgt = fr.get("right", (0, 0, 0))
         closing = fr.get("closing", 0.0)
-        peak = d.get("peak_closing", 0.0)
-        accum = d.get("closing_accum", 0.0)
+        car_spd = fr.get("car_speed", 0.0)
         keys_str = fr["input"].get("keys_str", "")
         ch_list  = fr["input"].get("ppo_channels", [])
         body = (
@@ -69,7 +67,7 @@ def format_hud(session, current_boost, obs_group=None):
             f"jump={int(fr['input']['jump'])} boost={int(fr['input']['boost'])} "
             f"hb={int(fr['input'].get('handbrake', False))}\n"
             f"car:   pos=({fr['car_pos'][0]:.0f},{fr['car_pos'][1]:.0f},"
-            f"{fr['car_pos'][2]:.0f})\n"
+            f"{fr['car_pos'][2]:.0f}) spd={car_spd:.1f}\n"
             f"       up_z={fr['up_z']:.2f} air={fr['air_time']:.2f} "
             f"flip={int(fr['is_flipping'])} boost={fr['boost']:.1f}\n"
             f"axes:  fwd=({fwd[0]:+.2f},{fwd[1]:+.2f},{fwd[2]:+.2f})\n"
@@ -78,18 +76,11 @@ def format_hud(session, current_boost, obs_group=None):
             f"ball:  pos=({fr['ball_pos'][0]:.0f},{fr['ball_pos'][1]:.0f},"
             f"{fr['ball_pos'][2]:.0f})\n"
             f"dist:  {fr['dist']:.1f}  (h={fr['dist_h']:.1f})  "
-            f"align={fr['align']:+.2f}\n"
-            f"closing: {closing:+.1f}  peak={peak:+.1f}  accum={accum:+.1f}\n"
+            f"closing={closing:+.1f}\n"
             f"---- reward ----\n"
             f"r_dist     = {d.get('r_dist', 0):+8.3f}\n"
             f"r_time     = {d.get('r_time', 0):+8.3f}\n"
-            f"r_align    = {d.get('r_align', 0):+8.3f}\n"
-            f"r_progress = {d.get('r_progress', 0):+8.3f}\n"
-            f"r_cl_bonus = {d.get('r_closing_bonus', 0):+8.3f}\n"
-            f"r_bst_wast = {d.get('r_boost_waste', 0):+8.3f} (wasted={getattr(session, 'boost_wasted_total', 0.0):.1f}f)\n"
-            f"r_bst_used = {d.get('r_boost_used', 0):+8.3f} (used={getattr(session, 'boost_used_total', 0.0):.1f})\n"
-            f"r_touch    = {d.get('r_touch', 0):+8.3f} (gvel={d.get('r_goal_vel', 0):+.2f})\n"
-            f"r_tgt_cpa  = {d.get('r_target_cpa', 0):+8.3f} (d={d.get('cpa_dist', 0):.0f} dt={d.get('cpa_time_err', 0):.2f}s)\n"
+            f"r_touch    = {d.get('r_touch', 0):+8.3f}\n"
             f"r_timeout  = {d.get('r_timeout', 0):+8.3f}\n"
             f"r_total    = {fr['r_total']:+8.3f}\n"
             f"r_cum      = {fr['r_cum']:+8.3f}\n"
@@ -103,19 +94,15 @@ def format_hud(session, current_boost, obs_group=None):
 
     if frames:
         fr = frames[-1]
-        d = fr["detail"]
         closing = fr.get("closing", 0.0)
-        peak = d.get("peak_closing", 0.0)
-        accum = d.get("closing_accum", 0.0)
+        car_spd = fr.get("car_speed", 0.0)
         keys_str = fr["input"].get("keys_str", "")
         body = (
             f"{'AUTO' if is_auto else 'RECORDING'}  "
             f"i={fr['i']}/{RECORD_LIMIT}  r_cum={fr['r_cum']:+.3f}\n"
             f"keys: [{keys_str}]\n"
-            f"dist={fr['dist']:.1f}  align={fr['align']:+.2f}\n"
-            f"closing={closing:+.1f}  peak={peak:+.1f}  accum={accum:+.1f}\n"
-            f"boost={fr['boost']:.1f} (wasted={getattr(session, 'boost_wasted_total', 0.0):.1f}f)  "
-            f"air={fr['air_time']:.2f}  flip={int(fr['is_flipping'])}\n"
+            f"dist={fr['dist']:.1f}  spd={car_spd:.1f}  closing={closing:+.1f}\n"
+            f"boost={fr['boost']:.1f}  air={fr['air_time']:.2f}  flip={int(fr['is_flipping'])}\n"
         )
         body += _fmt_flags(fr)
         if obs_group:

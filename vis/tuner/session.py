@@ -1,7 +1,3 @@
-"""录制 / 回放会话状态。纯逻辑，不依赖 Qt。
-
-包含 FREERUN 模式：不记录 frames，只统计 obs/raw 的 min/max。
-"""
 import numpy as np
 from core.constants import TOUCH_DIST, OBS_DIM, TICKS_PER_DECISION, MAX_DECISIONS
 from core.obs_v2 import build_obs_v2, OBS_V2_GROUPS, GROUP_ORDER
@@ -29,8 +25,6 @@ def _flatten_raw(parts):
 
 
 class Session:
-    """一次录制会话的状态机 + 物理步进 + reward 累加。"""
-
     def __init__(self, env, cfg):
         self.env = env
         self.cfg = cfg
@@ -41,9 +35,7 @@ class Session:
     def reset(self, replay_last=False, spawn_state=None):
         self.env.reset(replay_last=replay_last, spawn_state=spawn_state)
         from core.constants import MAX_DECISIONS_STAGE0
-        sp_mode = (self.env.last_spawn_state or {}).get("mode", getattr(self.env, "mode", "ground"))
         self.cfg.max_decisions = MAX_DECISIONS_STAGE0
-        self.cfg.target_cpa_bonus = 120.0 if sp_mode in ("target", "stage1") else 0.0
         self.state = STATE_IDLE
         self.frames = []
         self.playback_idx = 0
@@ -55,14 +47,6 @@ class Session:
         self.speed = getattr(self, "speed", 1.0)
         self.plot_mode = getattr(self, "plot_mode", 1)
 
-        # closing 与 min_dist 追踪（每 episode 重置）
-        self.min_dist = None
-        self.peak_closing = 0.0
-        self.closing_accum = 0.0
-        self.boost_wasted_total = 0.0
-        self.boost_used_total = 0.0
-
-        # freerun 状态
         self._obs_min = None
         self._obs_max = None
         self._raw_min = None
@@ -73,9 +57,6 @@ class Session:
         self.state = STATE_RECORDING
         self._last_time = None
 
-    # ------------------------------------------------------------
-    # 录制
-    # ------------------------------------------------------------
     def advance_recording(self, keys, now):
         if self._last_time is None:
             self._last_time = now
@@ -95,8 +76,7 @@ class Session:
 
     def _step_once(self, keys):
         ctrl = build_car_controls(keys)
-        wasted_now = float(self.env.step_with_waste_check(ctrl))
-        boost_used_now = float(getattr(self.env, "last_boost_used", 0.0))
+        pre_step_speed = self.env.step_tick(ctrl)
         snap = self.env.snapshot()
 
         obs_v2, obs_parts = build_obs_v2(
@@ -104,67 +84,48 @@ class Session:
 
         cs = self.env.car.get_state()
         flag_snap = {
-            "on_ground":    bool(cs.is_on_ground),
-            "is_jumping":   bool(cs.is_jumping),
-            "is_flipping":  bool(cs.is_flipping),
+            "on_ground":     bool(cs.is_on_ground),
+            "is_jumping":    bool(cs.is_jumping),
+            "is_flipping":   bool(cs.is_flipping),
             "is_supersonic": bool(cs.is_supersonic),
-            "auto_flip":    bool(cs.is_auto_flipping),
-            "has_flipped":  bool(cs.has_flipped),
-            "has_djump":    bool(cs.has_double_jumped),
-            "flip_or_jump": bool(cs.has_flip_or_jump),
-            "flip_reset":   bool(cs.has_flip_reset),
-            "world_cont":   bool(cs.has_world_contact),
-            "air_time":     float(cs.air_time),
-            "flip_time":    float(cs.flip_time),
-            "jump_time":    float(cs.jump_time),
-            "boost_time":   float(cs.boosting_time),
+            "auto_flip":     bool(cs.is_auto_flipping),
+            "has_flipped":   bool(cs.has_flipped),
+            "has_djump":     bool(cs.has_double_jumped),
+            "flip_or_jump":  bool(cs.has_flip_or_jump),
+            "flip_reset":    bool(cs.has_flip_reset),
+            "world_cont":    bool(cs.has_world_contact),
+            "air_time":      float(cs.air_time),
+            "flip_time":     float(cs.flip_time),
+            "jump_time":     float(cs.jump_time),
+            "boost_time":    float(cs.boosting_time),
         }
 
         max_dec = getattr(self.cfg, "max_decisions", MAX_DECISIONS)
         rec_limit = max_dec * TICKS_PER_DECISION
         prev = self.prev_snap
         if prev is None:
-            self.min_dist = snap["dist"]
             r_total = 0.0
-            detail = {"r_total": 0.0, "r_dist": 0.0, "min_dist": self.min_dist,
-                      "r_time": 0.0, "r_align": 0.0,
-                      "r_progress": 0.0, "r_closing_bonus": 0.0,
-                      "r_boost_waste": 0.0, "boost_wasted": 0.0,
-                      "r_boost_used": 0.0, "boost_used": 0.0,
-                      "r_touch": 0.0, "r_target_cpa": 0.0, "r_timeout": 0.0,
-                      "peak_closing": self.peak_closing,
-                      "closing_accum": self.closing_accum}
+            detail = {
+                "r_dist": 0.0,
+                "r_time": 0.0,
+                "r_touch": 0.0,
+                "r_timeout": 0.0,
+                "r_total": 0.0,
+            }
             touched = False
             timeout = False
         else:
             touched = snap["touched"]
             timeout = (len(self.frames) + 1) >= rec_limit
-            self.boost_wasted_total += wasted_now
-            self.boost_used_total += boost_used_now
-            cpa_d, cpa_terr = None, 0.0
-            if touched and getattr(self.cfg, "target_cpa_bonus", 0.0) > 0.0:
-                cpa_d, _, cpa_terr = self.env.evaluate_shot_cpa()
             r_total, detail = compute_step_reward(
                 self.cfg,
-                prev_dist=prev["dist"], new_dist=snap["dist"],
-                step=min(float(max_dec), (len(self.frames) + 1) / float(TICKS_PER_DECISION)),
-                touched=touched, timeout=timeout,
-                air_time=snap["air_time"], align=snap["align"],
-                prev_dist_h=prev["dist_h"], new_dist_h=snap["dist_h"],
-                closing=snap["closing"],
-                peak_closing=self.peak_closing,
-                closing_accum=self.closing_accum,
-                ball_vel_to_goal=snap["ball_vel_to_goal"],
+                prev_dist=prev["dist"],
+                new_dist=snap["dist"],
+                car_speed=pre_step_speed,
+                touched=touched,
+                timeout=timeout,
                 ticks_elapsed=1,
-                boost_wasted_ticks=wasted_now,
-                boost_used=boost_used_now,
-                min_dist=self.min_dist,
-                cpa_dist=cpa_d,
-                cpa_time_err=cpa_terr,
             )
-            self.min_dist      = detail["min_dist"]
-            self.peak_closing  = detail["peak_closing"]
-            self.closing_accum = detail["closing_accum"]
             self.r_cum += r_total
 
         self.frames.append({
@@ -174,7 +135,6 @@ class Session:
             "input": ctrl_to_dict(ctrl),
             "car_pos": snap["car_pos"], "car_vel": snap["car_vel"],
             "car_speed": snap["car_speed"], "is_supersonic": snap["is_supersonic"],
-            "boost_wasted": wasted_now, "boost_used": boost_used_now,
             "ball_pos": snap["ball_pos"], "ball_vel": snap["ball_vel"],
             "up_z": snap["up_z"], "on_ground": snap["on_ground"],
             "is_flipping": snap["is_flipping"], "air_time": snap["air_time"],
@@ -201,9 +161,6 @@ class Session:
         return (f"完成 ({reason})  {len(self.frames)} 帧 / "
                 f"累计 {self.r_cum:+.2f}  [Space 回放 / R 重置]")
 
-    # ------------------------------------------------------------
-    # 回放
-    # ------------------------------------------------------------
     def tick_playback(self):
         if not self.playback_playing or not self.frames:
             return False
@@ -233,9 +190,6 @@ class Session:
                                         round(self.speed + delta, 2)))
         self._last_time = None
 
-    # ------------------------------------------------------------
-    # FREERUN
-    # ------------------------------------------------------------
     def begin_freerun(self):
         self.state = STATE_FREERUN
         self._last_time = None

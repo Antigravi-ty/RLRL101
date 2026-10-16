@@ -24,7 +24,7 @@ def eval_ground_batch(env, model, batch, max_decisions=MAX_DECISIONS_STAGE0):
     all_ticks_list = []
     rcum_list = []
     touch_rcum_list = []
-    peak_cl_list = []
+    touch_spd_list = []
     jump_eps = 0
     flip_eps = 0
 
@@ -34,14 +34,12 @@ def eval_ground_batch(env, model, batch, max_decisions=MAX_DECISIONS_STAGE0):
         env.reset(spawn_state=sd)
         obs_curr = env.last_obs_v3
         prev_snap = env.snapshot()
-        min_dist = prev_snap["dist"]
-        peak_closing = 0.0
-        closing_accum = 0.0
         ep_rcum = 0.0
         ep_ticks = 0
         touched_now = False
         ep_jumped = False
         ep_flipped = False
+        pre_touch_speed = prev_snap["car_speed"]
 
         for step in range(1, max_decisions + 1):
             if dev.type == "cpu" and hasattr(model, "act_step_fast"):
@@ -55,11 +53,8 @@ def eval_ground_batch(env, model, batch, max_decisions=MAX_DECISIONS_STAGE0):
                 ep_jumped = True
             ctrl = multi_discrete_to_controls(act_np)
             ticks_run = 0
-            wasted_ticks = 0.0
-            boost_used_step = 0.0
             for _ in range(TICKS_PER_DECISION):
-                wasted_ticks += float(env.step_with_waste_check(ctrl))
-                boost_used_step += float(getattr(env, "last_boost_used", 0.0))
+                pre_touch_speed = env.step_tick(ctrl)
                 ticks_run += 1
                 if env._touched:
                     break
@@ -70,32 +65,23 @@ def eval_ground_batch(env, model, batch, max_decisions=MAX_DECISIONS_STAGE0):
             touched_now = snap["touched"]
             timeout_now = (step == max_decisions) and not touched_now
 
-            exact_step = ep_ticks / float(TICKS_PER_DECISION)
-            r, detail = compute_step_reward(
+            r, _ = compute_step_reward(
                 cfg,
-                prev_dist=prev_snap["dist"], new_dist=snap["dist"],
-                step=exact_step,
-                touched=touched_now, timeout=timeout_now,
-                air_time=snap["air_time"], align=snap["align"],
-                prev_dist_h=prev_snap["dist_h"], new_dist_h=snap["dist_h"],
-                closing=snap["closing"],
-                peak_closing=peak_closing, closing_accum=closing_accum,
-                ball_vel_to_goal=snap["ball_vel_to_goal"],
+                prev_dist=prev_snap["dist"],
+                new_dist=snap["dist"],
+                car_speed=pre_touch_speed,
+                touched=touched_now,
+                timeout=timeout_now,
                 ticks_elapsed=ticks_run,
-                boost_wasted_ticks=wasted_ticks,
-                boost_used=boost_used_step,
-                min_dist=min_dist,
             )
-            min_dist      = detail["min_dist"]
-            peak_closing  = detail["peak_closing"]
-            closing_accum = detail["closing_accum"]
-            ep_rcum      += r
-            prev_snap     = snap
+            ep_rcum  += r
+            prev_snap = snap
 
             if touched_now:
                 touch_count += 1
                 touch_ticks_list.append(ep_ticks)
                 touch_rcum_list.append(ep_rcum)
+                touch_spd_list.append(pre_touch_speed)
                 break
 
             obs_curr, _, _ = build_obs_v3(
@@ -110,7 +96,6 @@ def eval_ground_batch(env, model, batch, max_decisions=MAX_DECISIONS_STAGE0):
             flip_eps += 1
         all_ticks_list.append(ep_ticks if touched_now else max_ticks)
         rcum_list.append(ep_rcum)
-        peak_cl_list.append(peak_closing)
 
     n_tot = len(batch)
     mean_touch_ticks = float(np.mean(touch_ticks_list)) if touch_ticks_list else float("inf")
@@ -125,7 +110,7 @@ def eval_ground_batch(env, model, batch, max_decisions=MAX_DECISIONS_STAGE0):
         "all_dec": mean_all_ticks / float(TICKS_PER_DECISION),
         "mean_rcum": float(np.mean(rcum_list)),
         "touch_rcum": float(np.mean(touch_rcum_list)) if touch_rcum_list else 0.0,
-        "mean_peak_closing": float(np.mean(peak_cl_list)),
+        "mean_touch_speed": float(np.mean(touch_spd_list)) if touch_spd_list else 0.0,
         "jump_eps": jump_eps,
         "flip_eps": flip_eps,
         "per_ticks": all_ticks_list,
@@ -158,7 +143,7 @@ def evaluate_model(ckpt_path, eval_seed=20261016, n_ground_batches=1, verbose=Fa
     print(f"  触球率 (Touch Rate)         : {g_res['touch_count']}/{g_res['n_total']} ({g_res['touch_rate']:.1%})")
     print(f"  命中平均帧数 (Touch Frames) : {g_res['touch_ticks']:.1f} 帧 ({g_res['touch_dec']:.2f} 步)")
     print(f"  全样本含罚帧数 (All Frames) : {g_res['all_ticks']:.1f} 帧 ({g_res['all_dec']:.2f} 步, 漏球按 {MAX_DECISIONS_STAGE0*4}f 计)")
-    print(f"  平均峰值接近速度 (Closing)  : {g_res['mean_peak_closing']:.1f} uu/s")
+    print(f"  触球前平均车速 (Touch Speed): {g_res['mean_touch_speed']:.1f} uu/s")
     print(f"  触发跳跃/翻滚局数 (Jump/Flip): Jump={g_res['jump_eps']}/{g_res['n_total']} | Flip={g_res['flip_eps']}/{g_res['n_total']}")
     print(f"  平均总分 (Mean r_cum)       : {g_res['mean_rcum']:+.2f} (命中均分: {g_res['touch_rcum']:+.2f})")
 
@@ -197,7 +182,7 @@ def benchmark_all_prefixes(prefixes=None, from_tag="best", eval_seed=20261016, n
             "g_touch_dec": g_res["touch_dec"],
             "g_all_f": g_res["all_ticks"],
             "g_all_dec": g_res["all_dec"],
-            "g_peak": g_res["mean_peak_closing"],
+            "g_spd": g_res["mean_touch_speed"],
             "g_flip": g_res["flip_eps"],
             "g_rcum": g_res["mean_rcum"],
         })
@@ -210,15 +195,15 @@ def benchmark_all_prefixes(prefixes=None, from_tag="best", eval_seed=20261016, n
     print(f"  PPO 策略全场随机地面球基准排行榜 (Ground {len(batch)} 场景分层同题对决, seed={eval_seed})")
     print("========================================================================================================================")
     rows_g = sorted(rows, key=lambda r: (r["g_all_f"], -r["g_tc"]))
-    print(f"{'排序':<4} {'策略名称 (Prefix)':<20} {'触球率':<12} {'全样本均帧(含罚▼)':<18} {'命中均帧(步数)':<18} {'峰值接近速度':<14} {'翻滚局数':<10} {'平均总分(r_cum)'}")
+    print(f"{'排序':<4} {'策略名称 (Prefix)':<20} {'触球率':<12} {'全样本均帧(含罚▼)':<18} {'命中均帧(步数)':<18} {'触球前车速':<14} {'翻滚局数':<10} {'平均总分(r_cum)'}")
     print("-" * 120)
     for idx, r in enumerate(rows_g, 1):
         tc_str = f"{r['g_tc']}/{r['g_tot']}({r['g_tr']:.0%})"
         all_str = f"{r['g_all_f']:.1f}f ({r['g_all_dec']:.2f}s)"
         tch_str = f"{r['g_touch_f']:.1f}f ({r['g_touch_dec']:.2f}s)"
-        pk_str = f"{r['g_peak']:.0f} uu/s"
+        spd_str = f"{r['g_spd']:.0f} uu/s"
         fl_str = f"{r['g_flip']}/{r['g_tot']}"
-        print(f"{idx:<6} {r['prefix']:<20} {tc_str:<13} {all_str:<20} {tch_str:<20} {pk_str:<15} {fl_str:<11} {r['g_rcum']:+.2f}")
+        print(f"{idx:<6} {r['prefix']:<20} {tc_str:<13} {all_str:<20} {tch_str:<20} {spd_str:<15} {fl_str:<11} {r['g_rcum']:+.2f}")
     print("========================================================================================================================")
     return rows
 
@@ -241,21 +226,16 @@ def verify_and_compare_csv(csv_path, ckpt_path=None):
     last = rows[-1]
     r_cum = float(last.get("r_cum", 0.0))
     r_touch = float(last.get("r_touch", 0.0))
-    peak_cl = float(last.get("peak_closing", 0.0))
-    cl_acc  = float(last.get("closing_accum", 0.0))
     final_dist = float(last.get("dist", 0.0))
 
     boost_frames = sum(1 for r in rows if int(float(r.get("boost", 0))) == 1)
     jump_frames  = [int(r["i"]) for r in rows if int(float(r.get("jump", 0))) == 1]
     flip_frames  = [int(r["i"]) for r in rows if int(float(r.get("is_flipping", 0))) == 1]
-    cl2000_frames = [int(r["i"]) for r in rows if float(r.get("closing", 0.0)) > 2000.0]
 
     print("==========================================================================")
     print(f"  CSV 轨迹深度诊断: {csv_path} ({n_frames} 帧 = {n_frames/120.0:.2f}s, src={first.get('source', '?')})")
-    print(f"  终点 dist={final_dist:.1f} | peak_closing={peak_cl:.1f} | closing_accum={cl_acc:+.2f}")
-    print(f"  r_touch={r_touch:+.2f} | r_cum={r_cum:+.2f}")
-    print(f"  起跳帧={jump_frames[0] if jump_frames else '无'} | 首次翻滚帧={flip_frames[0] if flip_frames else '无'} | "
-          f"首次超速(>2000)帧={cl2000_frames[0] if cl2000_frames else '无'} (共 {len(cl2000_frames)} 帧)")
+    print(f"  终点 dist={final_dist:.1f} | r_touch={r_touch:+.2f} | r_cum={r_cum:+.2f}")
+    print(f"  起跳帧={jump_frames[0] if jump_frames else '无'} | 首次翻滚帧={flip_frames[0] if flip_frames else '无'}")
     print(f"  喷气帧={boost_frames}/{n_frames} ({boost_frames/n_frames:.1%})")
 
     sd = parse_spawn_state_from_row(first)

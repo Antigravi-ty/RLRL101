@@ -1,23 +1,14 @@
-"""环境封装。让 trainer 和可视化 (Tuner) 共享完全一致的 reset / settle / step 逻辑。
-
-支持场景模式（mode）：
-  - "ground" (alias "stage0") : 全场地面随机位置 + 随机偏航角 + 随机初速度球 + 30 帧悬挂稳定
-  - "target" (alias "stage1") : 全场地面随机球与车 + 随机目标点与期望到达时间 (CPA 评估)
-  - "static_aerial"           : 空中低速/慢抛高球与车辆生成
-  - "aerial"                  : 全场随机空中/高空球与车辆生成
-  - "mixed"                   : 50% 地面随机球 + 50% 空中随机球
-"""
 import math
 import random
+import hashlib
 import numpy as np
 import RocketSim as rs
-from .constants import KICKOFF_SETTLE_TICKS
 from .obs_v3 import build_obs_v3, OPP_GOAL_POS
 
 
-class KickoffEnv:
+class BallReachEnv:
     def __init__(self, mode="ground"):
-        self.mode = "ground" if mode in ("stage0", "kickoff", None) else ("target" if mode == "stage1" else mode)
+        self.mode = "ground" if mode in ("stage0", None) else ("target" if mode == "stage1" else mode)
         self.arena = rs.Arena(rs.GameMode.SOCCAR)
         self.car = self.arena.add_car(rs.Team.BLUE, rs.CarConfig.OCTANE)
         self.pads = self.arena.get_boost_pads()
@@ -34,19 +25,9 @@ class KickoffEnv:
         self.target_time = None
         self._shadow_arena = rs.Arena(rs.GameMode.SOCCAR)
         self._shadow_car = self._shadow_arena.add_car(rs.Team.BLUE, rs.CarConfig.OCTANE)
-        # 无车纯球竞技场：用于在触球瞬间以 0.015ms 极速推演球后续飞行轨迹的时空最近点 (CPA)
         self._ball_sim_arena = rs.Arena(rs.GameMode.SOCCAR)
 
-    def _settle(self, ticks=KICKOFF_SETTLE_TICKS):
-        """空跑指定物理帧数（无任何控制输入），消除开局悬架压缩回弹与微小滑移。"""
-        neutral = rs.CarControls()
-        self.car.set_controls(neutral)
-        if ticks > 0:
-            self.arena.step(int(ticks))
-        self._touched = False
-
     def _compute_spawn_id(self, sd):
-        import hashlib
         key_str = (
             f"{sd.get('mode','g')}_{sd['car_pos'][0]:.1f}_{sd['car_pos'][1]:.1f}_"
             f"{sd['car_fwd'][0]:.3f}_{sd['car_fwd'][1]:.3f}_"
@@ -55,12 +36,11 @@ class KickoffEnv:
         )
         return hashlib.md5(key_str.encode("utf-8")).hexdigest()[:4]
 
-    def _capture_pre_settle_state(self, use_mode, settle_ticks):
+    def _capture_spawn_state(self, use_mode):
         cs = self.car.get_state()
         bs = self.arena.ball.get_state()
         sd = {
             "mode": str(use_mode),
-            "settle_ticks": int(settle_ticks),
             "car_pos": (float(cs.pos.x), float(cs.pos.y), float(cs.pos.z)),
             "car_vel": (float(cs.vel.x), float(cs.vel.y), float(cs.vel.z)),
             "car_ang": (float(cs.ang_vel.x), float(cs.ang_vel.y), float(cs.ang_vel.z)),
@@ -77,16 +57,21 @@ class KickoffEnv:
         sd["spawn_id"] = self._compute_spawn_id(sd)
         return sd
 
-    def _apply_pre_settle_state(self, sd):
-        # 重新挂载车辆实例以彻底清零 Bullet 悬架弹簧与轮胎残余阻尼，确保 100% 确定性复现
+    def _reset_boost_pads(self):
+        for p in self.pads:
+            ps = p.get_state()
+            ps.is_active = True
+            ps.cooldown = 0.0
+            p.set_state(ps)
+
+    def _apply_spawn_state(self, sd):
         self.arena.remove_car(self.car)
         self.car = self.arena.add_car(rs.Team.BLUE, rs.CarConfig.OCTANE)
-        # 同步影子物理环境中的 car_id，以便后续用 clone_into 极速执行反事实 (Counterfactual) Boost Waste 检测
         while self._shadow_car.id < self.car.id:
             self._shadow_arena.remove_car(self._shadow_car)
             self._shadow_car = self._shadow_arena.add_car(rs.Team.BLUE, rs.CarConfig.OCTANE)
         self._touched = False
-        self.arena.reset_kickoff()
+        self._reset_boost_pads()
 
         cs = self.car.get_state()
         cs.pos = rs.Vec(*sd["car_pos"])
@@ -96,7 +81,9 @@ class KickoffEnv:
         cs.rot_mat.right   = rs.Vec(*sd["car_rgt"])
         cs.rot_mat.up      = rs.Vec(*sd["car_up"])
         cs.boost = float(sd["car_boost"])
+        cs.is_on_ground = (float(sd["car_pos"][2]) <= 20.0)
         self.car.set_state(cs)
+        self.car.set_controls(rs.CarControls())
 
         bs = self.arena.ball.get_state()
         bs.pos = rs.Vec(*sd["ball_pos"])
@@ -109,17 +96,9 @@ class KickoffEnv:
 
         self.target_pos = sd.get("target_pos")
         self.target_time = sd.get("target_time")
-
-        settle_ticks = int(sd.get("settle_ticks", KICKOFF_SETTLE_TICKS))
-        self._settle(settle_ticks)
         self.spawn_id = sd.get("spawn_id") or self._compute_spawn_id(sd)
 
     def step_with_waste_check(self, ctrl):
-        """单物理帧步进并执行反事实 (Counterfactual) Boost Wasted 检测：
-        当按下 Boost 且车体有氮气时，在影子环境中同步推演『假如本帧不按 Boost』的速度 v_no_boost：
-        - 若实际消耗了氮气 (cur_boost < no_boost_boost)，且按下 Boost 后的速度相比不按 Boost 没有任何提升甚至未阻止掉速 (v_with - v_no < 0.1 uu/s)，
-          则判定本帧为 Boost Wasted (返回 waste_ratio)，否则返回 0.0。
-        """
         cs_before = self.car.get_state()
         prev_boost = float(cs_before.boost)
         v_no_vec = None
@@ -150,22 +129,17 @@ class KickoffEnv:
 
         cur_s = self.car.get_state()
         cur_boost = float(cur_s.boost)
-        # 仅统计实际消耗的氮气 (0..100 标度)，若捡到 Boost Pad 导致 cur_boost 上升则记为 0.0
         boost_used = max(0.0, prev_boost - cur_boost)
 
         waste_ratio = 0.0
         if v_no_vec is not None and cur_boost < b_no_boost - 1e-4:
             vx, vy, vz = float(cur_s.vel.x), float(cur_s.vel.y), float(cur_s.vel.z)
             v_with_mag = float(math.sqrt(vx*vx + vy*vy + vz*vz))
-            # 仅当车速接近或达到 2300 uu/s 超音速上限 (>= 2290 uu/s) 时，才计算被速度上限截断的无效喷气比例；
-            # 彻底避免地面转向/漂移时因速度矢量与车头夹角导致的标量速率差被误判为 Boost Wasted。
             if v_with_mag >= 2290.0:
                 if was_on_ground:
-                    # 地面单帧满额 Boost 净增速度常数为 991.667 / 120 = 8.2639 uu/s
                     dv = max(0.0, v_with_mag - v_no_mag)
                     full_dv = 8.2639
                 else:
-                    # 空中单帧满额 Boost 净增速度常数为 1063.33 / 120 = 8.8611 uu/s
                     dv = max(0.0, v_with_mag - v_no_mag)
                     full_dv = 8.8611
                 if dv < full_dv - 0.05:
@@ -175,23 +149,17 @@ class KickoffEnv:
         self.last_waste_ratio = waste_ratio
         return waste_ratio
 
-    def reset(self, mode=None, settle_ticks=KICKOFF_SETTLE_TICKS, replay_last=False, spawn_state=None):
-        """重置环境并执行前置物理稳定（默认丢弃前 30 个物理帧，从第 31 帧开始正式记录/控制）。
-        - replay_last=True: 100% 确定性重放上一次生成的场景初始状态（不重新随机），供 R 键与 HUMAN/MODEL 同场景对比；
-        - spawn_state=... : 从指定的场景字典恢复初始状态；
-        - 默认 (replay_last=False): 随机生成新场景（供 N 键或训练采样）并记录到 self.last_spawn_state。
-        返回 (obs_v2, dist) 兼容接口，同时更新 self.last_obs_v3 与 self.last_parts。
-        """
+    def reset(self, mode=None, replay_last=False, spawn_state=None):
         if spawn_state is not None:
             self.last_spawn_state = dict(spawn_state)
             if "spawn_id" not in self.last_spawn_state:
                 self.last_spawn_state["spawn_id"] = self._compute_spawn_id(self.last_spawn_state)
-            self._apply_pre_settle_state(self.last_spawn_state)
+            self._apply_spawn_state(self.last_spawn_state)
         elif replay_last and self.last_spawn_state is not None:
-            self._apply_pre_settle_state(self.last_spawn_state)
+            self._apply_spawn_state(self.last_spawn_state)
         else:
             use_mode = mode or self.mode
-            if use_mode in ("stage0", "kickoff"):
+            if use_mode == "stage0":
                 use_mode = "ground"
             elif use_mode == "stage1":
                 use_mode = "target"
@@ -201,9 +169,8 @@ class KickoffEnv:
             self.arena.remove_car(self.car)
             self.car = self.arena.add_car(rs.Team.BLUE, rs.CarConfig.OCTANE)
             self._touched = False
-            self.arena.reset_kickoff()
+            self._reset_boost_pads()
 
-            actual_settle = int(settle_ticks)
             self.target_pos = None
             self.target_time = None
             if use_mode in ("ground", "stage0"):
@@ -212,13 +179,11 @@ class KickoffEnv:
                 self._randomize_stage1()
             elif use_mode == "static_aerial":
                 self._randomize_static_aerial()
-                actual_settle = 1
             elif use_mode == "aerial":
                 self._randomize_aerial()
-                actual_settle = 1
 
-            self.last_spawn_state = self._capture_pre_settle_state(use_mode, actual_settle)
-            self._apply_pre_settle_state(self.last_spawn_state)
+            self.last_spawn_state = self._capture_spawn_state(use_mode)
+            self._apply_spawn_state(self.last_spawn_state)
 
         obs_v3, obs_v2, parts = build_obs_v3(
             self.car, self.arena,
@@ -258,13 +223,10 @@ class KickoffEnv:
         cs.rot_mat.right   = rs.Vec(-sin_y, cos_y, 0.0)
         cs.rot_mat.up      = rs.Vec(0.0, 0.0, 1.0)
         cs.boost = random.uniform(33.3, 100.0)
+        cs.is_on_ground = True
         self.car.set_state(cs)
 
     def _randomize_stage1(self):
-        """Stage 1 (地面带意图定点定时击球)：
-        在 stage0 地面球与车辆随机分布的基础上，额外随机生成一个目标点 target_pos (x, y, z)
-        与期望到达时间 target_time (秒)，供触球后快速模拟评估时空最近点 (CPA)。
-        """
         self._randomize_stage0()
         bs = self.arena.ball.get_state()
         bx, by = float(bs.pos.x), float(bs.pos.y)
@@ -279,21 +241,12 @@ class KickoffEnv:
             d_b2t = max(1000.0, math.hypot(tx - bx, ty - by))
 
         tz = random.uniform(93.15, 450.0)
-        # 根据距离与随机期望球速 (900..2200 uu/s，涵盖慢吊传球与大力快抽) 设定合理的目标时间
         desired_avg_spd = random.uniform(900.0, 2200.0)
         tt = float(np.clip(d_b2t / desired_avg_spd, 0.5, 2.8))
         self.target_pos = (float(tx), float(ty), float(tz))
         self.target_time = round(tt, 3)
 
     def evaluate_shot_cpa(self, max_sim_ticks=360):
-        """触球后快速时空评估 (Fast Post-Touch Spatio-Temporal CPA Simulation)：
-        将当前球的状态放入无车纯球竞技场 `_ball_sim_arena` 中快速模拟最多 max_sim_ticks (3.0s)：
-        追踪球与目标点 target_pos 的三维标量距离 d(t)：
-          - 当 d(t) 持续缩小时，更新最小距离 min_d 与对应时刻 min_tick；
-          - 一旦 d(t) 停止缩小并开始增大 (d_now > d_prev)，说明刚刚经过最近点 (CPA)，立即截断停止模拟；
-          - 若触球后第 1 帧起球就在远离目标点 (not has_decreased)，第 1 帧即刻截断并返回 inf (得 0 分，防止反向击球混初始距离分)。
-        返回 (cpa_dist, cpa_time, time_err)。
-        """
         tgt = OPP_GOAL_POS if self.target_pos is None else np.asarray(self.target_pos, dtype=np.float32)
         tx, ty, tz = float(tgt[0]), float(tgt[1]), float(tgt[2])
 
@@ -309,14 +262,13 @@ class KickoffEnv:
         for tick in range(step_ticks, int(max_sim_ticks) + 1, step_ticks):
             self._ball_sim_arena.step(step_ticks)
             b_now = self._ball_sim_arena.ball.get_state()
-            d_now = math.sqrt((b_now.pos.x - tx)**2 + (b_now.pos.y - ty)**2 + (bs.pos.z if False else b_now.pos.z - tz)**2)
+            d_now = math.sqrt((b_now.pos.x - tx)**2 + (b_now.pos.y - ty)**2 + (b_now.pos.z - tz)**2)
             if d_now < d_prev - 1e-3:
                 has_decreased = True
                 if d_now < min_d:
                     min_d = d_now
                     min_tick = tick
             elif d_now > d_prev + 1e-3:
-                # 距离停止下降并开始反升（或触球后直接反向飞离）：立即停止模拟
                 break
             d_prev = d_now
 
@@ -327,14 +279,7 @@ class KickoffEnv:
         time_err = abs(cpa_time - float(self.target_time)) if self.target_time is not None else 0.0
         return float(min_d), cpa_time, float(time_err)
 
-    def generate_stratified_stage0_batch(self, settle_ticks=KICKOFF_SETTLE_TICKS, rng=None, include_target=None):
-        """生成 24 个正交分层桶 (Stratified Archetypes) 的 stage0 / stage1 初始场景列表：
-        - 3 档车球距离: 近距 [950, 1800]、中距 [1800, 3200]、远距 [3200, 4800]
-        - 4 档车头相对球夹角: 正对 [0°, 30°]、斜前 [30°, 90°]、斜后 [90°, 135°]、正背对 [135°, 180°]
-        - 2 档球初速度: 低速/静止 [0, 80]、高速移动 [200, 400]
-        每个桶内的实际坐标、朝向符号与速度方向均为现场随机生成，兼具『性质全覆盖』与『防固定点过拟合』。
-        若为 stage1，则每个桶同时随机生成对应的 target_pos 与 target_time。
-        """
+    def generate_stratified_stage0_batch(self, rng=None, include_target=None):
         r = rng if rng is not None else random
         if include_target is None:
             include_target = (self.mode in ("target", "stage1"))
@@ -394,7 +339,6 @@ class KickoffEnv:
 
                     sd = {
                         "mode": "target" if include_target else "ground",
-                        "settle_ticks": int(settle_ticks),
                         "car_pos": (float(cx), float(cy), 17.0),
                         "car_vel": (0.0, 0.0, 0.0),
                         "car_ang": (0.0, 0.0, 0.0),
@@ -413,9 +357,6 @@ class KickoffEnv:
         return batch
 
     def _randomize_static_aerial(self):
-        """Static Aerial (空中低速/慢抛高球)：
-        球在水平方向近似静止或微动，带有向上的初始速度使球在空中停留较长时间，供训练初级起跳飞球。
-        """
         bs = self.arena.ball.get_state()
         bx = random.uniform(-2000.0, 2000.0)
         by = random.uniform(-2000.0, 2500.0)
@@ -443,6 +384,7 @@ class KickoffEnv:
         cs.rot_mat.right   = rs.Vec(-sin_y, cos_y, 0.0)
         cs.rot_mat.up      = rs.Vec(0.0, 0.0, 1.0)
         cs.boost = random.uniform(60.0, 100.0)
+        cs.is_on_ground = True
         self.car.set_state(cs)
 
     def _randomize_aerial(self):
@@ -470,6 +412,7 @@ class KickoffEnv:
         cs.rot_mat.right   = rs.Vec(-sin_y, cos_y, 0.0)
         cs.rot_mat.up      = rs.Vec(0.0, 0.0, 1.0)
         cs.boost = random.uniform(60.0, 100.0)
+        cs.is_on_ground = True
         self.car.set_state(cs)
 
     def get_obs_v3(self, intent_override=None):

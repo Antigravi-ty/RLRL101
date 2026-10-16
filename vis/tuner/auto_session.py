@@ -1,6 +1,3 @@
-"""AutoSession：纯 PPO 自动驾驶会话（自动读取 checkpoint 中的 mode 场景配置）。
-120Hz 物理，30Hz 决策，带前 30 帧开球物理预稳定 (KICKOFF_SETTLE_TICKS)。
-"""
 import os
 import numpy as np
 import torch
@@ -35,9 +32,8 @@ class AutoSession(Session):
 
     def reload(self):
         self.model, self.ckpt_meta = load_ppo_model(self.ckpt_path, device="cpu")
-        # ★ 自动同步模型训练时的场景模式 (ground / target / static_aerial / aerial / mixed) 到可视化环境！
         ckpt_mode = self.ckpt_meta.get("mode", "ground")
-        if ckpt_mode in ("stage0", "kickoff"):
+        if ckpt_mode == "stage0":
             ckpt_mode = "ground"
         self.env.mode = ckpt_mode
         self.cfg.max_decisions = MAX_DECISIONS_STAGE0

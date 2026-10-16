@@ -118,15 +118,6 @@ class SpeedDividerBar(QtWidgets.QWidget):
 
 
 class WrapAnywhereLabel(QtWidgets.QLabel):
-    """支持在任意字符处强制折行 (WrapAnywhere)、横向严格固定不撑开父容器、纵向自适应拉伸的标签。
-    为什么不用默认 QLabel.setWordWrap(True)：
-    1) Qt 默认的 QLabel wordWrap 只在空格/连字符处折行 (WordWrap)，遇到长路径如
-       `ckpt=kickoff_ground_v2_best` 或 `CSV -> data/_05_...` 时无法折行，会把右侧栏撑宽；
-    2) 默认 QLabel 的 minimumSizeHint() 会随文本长度变化，导致第 3 行 status_label 文本一变，
-       整个右侧面板就忽宽忽窄地左右抖动。
-    本组件通过 QTextLayout + WrapAnywhere 实现在任意字符处断行，并锁定横向 sizeHint 为 0，
-    纵向根据当前固定宽度动态计算所需的精确高度。
-    """
     def __init__(self, text="", parent=None):
         super().__init__(text, parent)
         self.setWordWrap(True)

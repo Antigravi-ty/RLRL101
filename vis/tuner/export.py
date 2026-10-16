@@ -1,4 +1,3 @@
-"""CSV 导出。合并物理控制 + 6 通道键盘状态 + 显式按键名 + reward + obs_v2 + flags。"""
 import csv
 import os
 import time
@@ -11,12 +10,6 @@ def _gv(parts, grp, k):
 
 
 def export_frames(frames, out_dir="data", mode="full"):
-    """CSV 导出命名规范：
-      data/_<spawn_id>_<n_frames>f_<human|model>[_compact]_<ts>.csv
-      - 开头第一个字符为下划线 `_`，方便用户直接在文件名前面添加自定义场景名（例如改成 `direct_a3f2_219f_human_...csv` 或 `direct_219_human.csv`）；
-      - `<spawn_id>` 是根据当前场景初始车位/朝向/球位/球速自动生成的 4 位确定性指纹，同一场景下录制的 human 与 model 拥有完全相同的 `<spawn_id>`，无需打开文件即可一眼配对！
-      - `<n_frames>f` 直观显示总耗时帧数；`<human|model>` 标识操控者。
-    """
     if not frames:
         print("[tuner] no frames")
         return None
@@ -29,7 +22,7 @@ def export_frames(frames, out_dir="data", mode="full"):
     fn = f"{out_dir}/_{spawn_id}_{n_f}f_{src_tag}{mode_suffix}_{int(time.time())}.csv"
 
     spawn_cols = [
-        "source", "spawn_id", "spawn_mode", "spawn_settle",
+        "source", "spawn_id", "spawn_mode",
         "init_cx", "init_cy", "init_cz",
         "init_cvx", "init_cvy", "init_cvz",
         "init_cax", "init_cay", "init_caz",
@@ -70,7 +63,6 @@ def export_frames(frames, out_dir="data", mode="full"):
             "r_total", "r_cum",
             "r_dist", "r_time", "r_align",
             "r_progress", "r_closing_bonus", "r_boost_waste", "r_boost_used", "r_touch", "r_timeout",
-            # obs 31 维
             "obs_a_nx", "obs_a_px", "obs_a_ny", "obs_a_py",
             "obs_a_floor", "obs_a_ceil",
             "obs_b_pitch", "obs_b_yaw", "obs_b_roll",
@@ -81,7 +73,6 @@ def export_frames(frames, out_dir="data", mode="full"):
             "obs_g_onground", "obs_g_flip_or_jump", "obs_g_is_flipping",
             "obs_g_is_jumping", "obs_g_air_time", "obs_g_boost",
             "obs_h_closing",
-            # flags 13 项
             "fl_on_ground", "fl_jumping", "fl_flipping", "fl_auto_flip",
             "fl_has_flipped", "fl_has_djump", "fl_flip_or_jump",
             "fl_flip_reset", "fl_world_cont",
@@ -112,7 +103,6 @@ def export_frames(frames, out_dir="data", mode="full"):
                 fr.get("source", "session"),
                 sp.get("spawn_id", "0000"),
                 sp.get("mode", "ground"),
-                int(sp.get("settle_ticks", 30)),
                 *(sp.get("car_pos") or (0.0, 0.0, 0.0)),
                 *(sp.get("car_vel") or (0.0, 0.0, 0.0)),
                 *(sp.get("car_ang") or (0.0, 0.0, 0.0)),
@@ -212,12 +202,10 @@ def export_frames(frames, out_dir="data", mode="full"):
 
 
 def parse_spawn_state_from_row(row):
-    """从 CSV 首行解析完整的 pre-settle spawn_state 字典，供 100% 确定性复现。"""
     if "init_cx" not in row or not row.get("init_cx"):
         return None
     return {
-        "mode": row.get("spawn_mode", "stage0"),
-        "settle_ticks": int(float(row.get("spawn_settle", 30))),
+        "mode": row.get("spawn_mode", "ground"),
         "car_pos": (float(row["init_cx"]), float(row["init_cy"]), float(row["init_cz"])),
         "car_vel": (float(row["init_cvx"]), float(row["init_cvy"]), float(row["init_cvz"])),
         "car_ang": (float(row["init_cax"]), float(row["init_cay"]), float(row["init_caz"])),

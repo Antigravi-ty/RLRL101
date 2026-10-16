@@ -1,4 +1,3 @@
-"""best / latest 双权重保存与选择逻辑（纯 PPO 架构，自带 mode 元数据记录）。"""
 import os
 import copy
 import random
@@ -11,14 +10,13 @@ except ImportError:
 from core.constants import (
     OBS_V3_DIM, PPO_HIDDEN_DIM, PPO_ACTION_DIMS,
     TICKS_PER_DECISION, MAX_DECISIONS_STAGE0,
-    POST_TOUCH_STEPS, KICKOFF_SETTLE_TICKS,
 )
 from core.nn import ActorCritic, multi_discrete_to_controls
 from core.obs_v3 import build_obs_v3
 
-CKPT_DIR      = "./checkpoints"
-CKPT_LATEST   = os.path.join(CKPT_DIR, "ground_v0_latest.pt")
-CKPT_BEST     = os.path.join(CKPT_DIR, "ground_v0_best.pt")
+CKPT_DIR    = "./checkpoints"
+CKPT_LATEST = os.path.join(CKPT_DIR, "ground_v0_latest.pt")
+CKPT_BEST   = os.path.join(CKPT_DIR, "ground_v0_best.pt")
 
 
 def ensure_dir():
@@ -40,21 +38,11 @@ def ckpt_name(prefix=None, tag="latest", default_mode="ground"):
     return f"{norm}_{tag}.pt"
 
 
-def ckpt_paths(prefix=None, default_mode="ground", resolve_legacy=False):
-    """返回 (latest_path, best_path)。
-    直接使用 `{prefix}_latest.pt` 与 `{prefix}_best.pt`（例如 `ground_v0_latest.pt`、`static_aerial_v0_best.pt`）。
-    """
+def ckpt_paths(prefix=None, default_mode="ground"):
     ensure_dir()
     norm = normalize_prefix(prefix, default_mode=default_mode)
     latest_path = os.path.join(CKPT_DIR, f"{norm}_latest.pt")
     best_path   = os.path.join(CKPT_DIR, f"{norm}_best.pt")
-    if resolve_legacy and not norm.startswith("kickoff_"):
-        leg_latest = os.path.join(CKPT_DIR, f"kickoff_{norm}_latest.pt")
-        leg_best   = os.path.join(CKPT_DIR, f"kickoff_{norm}_best.pt")
-        if not os.path.exists(latest_path) and os.path.exists(leg_latest):
-            latest_path = leg_latest
-        if not os.path.exists(best_path) and os.path.exists(leg_best):
-            best_path = leg_best
     return latest_path, best_path
 
 
@@ -80,7 +68,6 @@ def save_ckpt(path, model, episode, mode="ground", note="", extra=None):
         "obs_dim":     getattr(model, "obs_dim", OBS_V3_DIM),
         "hidden_dim":  getattr(model, "hidden_dim", PPO_HIDDEN_DIM),
         "action_dims": getattr(model, "action_dims", PPO_ACTION_DIMS),
-        "settle_ticks": KICKOFF_SETTLE_TICKS,
         "episode":     episode,
         "note":        note,
     }
@@ -90,7 +77,6 @@ def save_ckpt(path, model, episode, mode="ground", note="", extra=None):
 
 
 def load_ppo_model(path, device="cpu"):
-    """加载 PPO ActorCritic 权重，返回 (model, ckpt_dict)。"""
     ckpt = torch.load(path, map_location=device)
     obs_dim = ckpt.get("obs_dim", OBS_V3_DIM)
     hidden_dim = ckpt.get("hidden_dim", PPO_HIDDEN_DIM)
@@ -110,9 +96,6 @@ def load_ckpt(path, net, strict_dims=True):
 
 
 def evaluate_scenario_batch(env, model, spawn_batch, max_decisions=MAX_DECISIONS_STAGE0):
-    """在给定的一批确定性初始场景列表 (spawn_batch) 上评估策略。
-    返回 (touch_count, n_total, mean_touch_step, per_step_list)。
-    """
     dev = next(model.parameters()).device
     touch_count = 0
     touch_steps = []
@@ -174,10 +157,6 @@ class BestTracker:
         self.last_duel_info = ""
 
     def init_baseline(self, model, env):
-        """在加载已有模型继续训练时，记录当前模型作为守门员 (best_model)，
-        后续每次评估将采用『分层随机出题 + 挑战者 vs 守门员同题正面对决 (Head-to-Head Paired Duel)』，
-        既保证每次考题位置完全随机（防固定点过拟合），又 100% 消除抽到短路径的运气误差！
-        """
         self.best_model = copy.deepcopy(model)
         self.best_model.eval()
         batch = env.generate_stratified_stage0_batch(rng=self._eval_rng)
@@ -194,7 +173,6 @@ class BestTracker:
         return tc, self.best_metrics, avg_step
 
     def maybe_save(self, model, episode, env):
-        # 分层随机生成 24 道涵盖全部距离×角度×球速区间的全新考题，让挑战者与守门员同题对决
         batch = env.generate_stratified_stage0_batch(rng=self._eval_rng)
         c_tc, n_tot, c_avg, c_all_steps = evaluate_scenario_batch(env, model, batch)
         c_all_avg = float(np.mean(c_all_steps))

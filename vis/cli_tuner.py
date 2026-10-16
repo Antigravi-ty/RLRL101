@@ -1,13 +1,12 @@
-"""CLI 版本的 Tuner / 多模型排行榜评估、Ground 24 场景基准测试、人类参考轨迹对比与 CSV 诊断工具 (纯 PPO 架构，已彻底移除 Kickoff 5 开球位评估)。"""
 import os, sys, csv, glob, argparse, time, random
 import numpy as np
 import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.env import KickoffEnv
+from core.env import BallReachEnv
 from core.constants import (
-    TICKS_PER_DECISION, MAX_DECISIONS_STAGE0, KICKOFF_SETTLE_TICKS,
+    TICKS_PER_DECISION, MAX_DECISIONS_STAGE0,
 )
 from core.nn import multi_discrete_to_controls
 from core.obs_v3 import build_obs_v3
@@ -138,15 +137,15 @@ def evaluate_model(ckpt_path, eval_seed=20261016, n_ground_batches=1, verbose=Fa
         print(f"[cli_tuner] 错误: 找不到权重文件 {ckpt_path}")
         return None
 
-    env = KickoffEnv(mode="ground")
+    env = BallReachEnv(mode="ground")
     model, ckpt = load_ppo_model(ckpt_path, device="cpu")
     ckpt_mode = ckpt.get("mode", "ground")
-    if ckpt_mode in ("stage0", "kickoff"):
+    if ckpt_mode == "stage0":
         ckpt_mode = "ground"
 
     print("========================================================================================")
     print(f"  CLI Tuner [PPO]: 评估 {os.path.basename(ckpt_path)} (ckpt_mode={ckpt_mode})")
-    print(f"  ep={ckpt.get('episode', '?')}  settle={KICKOFF_SETTLE_TICKS}f  note={ckpt.get('note', '')}")
+    print(f"  ep={ckpt.get('episode', '?')}  note={ckpt.get('note', '')}")
     print("========================================================================================")
 
     t0 = time.time()
@@ -171,7 +170,7 @@ def evaluate_model(ckpt_path, eval_seed=20261016, n_ground_batches=1, verbose=Fa
 def benchmark_all_prefixes(prefixes=None, from_tag="best", eval_seed=20261016, n_ground_batches=1):
     if not prefixes:
         prefixes = discover_prefixes()
-    env = KickoffEnv(mode="ground")
+    env = BallReachEnv(mode="ground")
     rng = random.Random(eval_seed)
     batch = []
     for _ in range(max(1, n_ground_batches)):
@@ -179,7 +178,7 @@ def benchmark_all_prefixes(prefixes=None, from_tag="best", eval_seed=20261016, n
 
     rows = []
     for p in prefixes:
-        latest_p, best_p = ckpt_paths(p, resolve_legacy=True)
+        latest_p, best_p = ckpt_paths(p)
         path = best_p if from_tag == "best" else latest_p
         if not os.path.exists(path):
             path = latest_p if from_tag == "best" else best_p
@@ -261,7 +260,7 @@ def verify_and_compare_csv(csv_path, ckpt_path=None):
 
     sd = parse_spawn_state_from_row(first)
     if sd is not None and "px" in first:
-        env = KickoffEnv(mode=sd["mode"])
+        env = BallReachEnv(mode=sd["mode"])
         env.reset(spawn_state=sd)
         max_car_err = 0.0
         max_ball_err = 0.0
@@ -311,7 +310,6 @@ def main():
             verify_and_compare_csv(vp, args.ckpt)
         return
 
-    # 若未指定 --ckpt 且未指定单个 --prefix（或传了多个 --prefix），则运行多模型排行榜对比
     if args.ckpt is None and (not args.prefix or len(args.prefix) > 1):
         prefixes = args.prefix if args.prefix else discover_prefixes()
         if len(prefixes) > 1 or not args.prefix:
@@ -326,7 +324,7 @@ def main():
     ckpt_path = args.ckpt
     if ckpt_path is None:
         prefix = args.prefix[0] if args.prefix else discover_prefixes()[0]
-        latest_p, best_p = ckpt_paths(prefix, resolve_legacy=True)
+        latest_p, best_p = ckpt_paths(prefix)
         ckpt_path = best_p if args.from_ckpt == "best" else latest_p
         if not os.path.exists(ckpt_path):
             alt_p = latest_p if args.from_ckpt == "best" else best_p

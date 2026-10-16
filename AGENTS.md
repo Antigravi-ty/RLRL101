@@ -1,4 +1,4 @@
-# RLRL101 Agent 指南与运行最佳实践 (纯 PPO v12 架构)
+# RLRL101 Agent 指南与运行最佳实践 (纯 PPO 架构)
 
 ### 1. 极简环境配置 (~200MB 预编译安装，无需 CMake / C++ 编译器)
 在 Linux / M1 Mac / Headless 环境下，仅需安装核心轻量依赖即可运行完整强化学习训练与 CLI 评估：
@@ -16,16 +16,12 @@ pip install pandas
 
 ---
 
-### 2. 核心设计规范 (v12: 纯 PPO + 30帧悬挂预稳定 + 帧级精确奖励对齐)
-1. **开球/地面物理预稳定 (`KICKOFF_SETTLE_TICKS = 30`)**：
-   - `RocketSim` 初始落地存在约 30 个物理帧 (0.25s) 的悬挂微弹与滑移；
-   - `KickoffEnv.reset()` 会在每次场景生成后**自动无输入空跑 30 个物理帧且不计分**，待车辆彻底稳定后再开始第 1 帧记录与模型控制。
+### 2. 核心设计规范
+1. **首帧输入即刻释放模拟**：
+   - `BallReachEnv.reset()` 生成随机场景后保持静止初始状态，无论是模型还是人类玩家，在给出第一个输入时立即开始真正的物理模拟 (`arena.step`)。
 2. **120Hz (Tuner) 与 30Hz (Trainer) 帧级奖励 100% 严格对齐 (`ticks_elapsed` + 浮点 `step`)**：
-   - `compute_step_reward` 接收 `ticks_elapsed` 与精确帧折算步数 `step = ep_ticks / 4.0`，使单次 4 帧决策步内哪怕提前 1 个物理帧 (1/120s) 触球也能精确获得帧级时间奖励，且 30Hz 训练器与 120Hz 面板算出的 `r_cum` 分毫不差。
-3. **守恒距离势函数 (`use_min_dist_watermark = False`) 与超音速向球冲刺激励 (`closing_threshold = 2000.0`)**：
-   - 距离分采用路径无关的严格守恒势函数 `0.01 * (prev_dist - new_dist)`，任意起点到触球终点的积分恒定，既杜绝绕圈刷分，又在背对球调头或追击滚远球时提供 100% 稠密的方向梯度；
-   - 反事实无效喷气检测仅在接近 2300 uu/s 超音速上限 (`>= 2290 uu/s`) 时触发，彻底避免地面带氮气转向/漂移被误判扣分。
-4. **6 通道键盘独立输出 (`PPO_ACTION_DIMS = [3, 3, 3, 2, 2, 2]`)**：
+   - `compute_step_reward` 接收 `ticks_elapsed` 与精确帧折算步数 `step = ep_ticks / 4.0`，使 30Hz 训练器与 120Hz 面板算出的 `r_cum` 分毫不差。
+3. **6 通道键盘独立输出 (`PPO_ACTION_DIMS = [3, 3, 3, 2, 2, 2]`)**：
    - `ch0_ws` (`0=S, 1=None, 2=W`)：同时控制油门与空中俯仰 (`pitch = -throttle`)；
    - `ch1_ad` (`0=A, 1=None, 2=D`)：同时控制转向与空中偏航；
    - `ch2_qe` (`0=Q, 1=None, 2=E`)：空中横滚；
@@ -36,15 +32,12 @@ pip install pandas
 ### 3. 统一运行入口与 CLI 工具
 - **CLI 多模型排行榜对比与单模型评估 (`python run.py cli` / `python run.py eval`)**：
   ```bash
-  # 自动发现 ./checkpoints/ 下全部模型，同题评测 Kickoff 5位 + Ground 分层场景并打印排行榜
+  # 自动发现 ./checkpoints/ 下全部模型，同题评测 Ground 分层场景并打印排行榜
   python run.py cli
   python run.py cli --batches 3
 
-  # 评估指定 prefix 模型 (同时输出 Ground 基准与 Kickoff 5位详情)
+  # 评估指定 prefix 模型
   python run.py cli --prefix ground_v4
-
-  # 校验并诊断 CSV 轨迹文件
-  python run.py cli --verify data/model243.csv
   ```
 - **PPO 模型训练（默认无限循环，按 `Ctrl+C` 安全保存并退出）**：
   ```bash

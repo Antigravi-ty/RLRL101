@@ -1,15 +1,3 @@
-"""train_ppo.py — 纯 PPO 多离散 6 通道键盘控制训练器 (v12)
-
-核心特性：
-  1. 开球/地面物理预稳定 (`KICKOFF_SETTLE_TICKS = 30`)：
-     每次 reset 后自动空跑 30 个物理帧 (0.25s) 且不计分，待悬挂完全静止后再开始第 1 步决策与计分。
-  2. 120Hz / 30Hz 帧级奖励严格对齐 (`ticks_elapsed = ticks_run`, `step = ep_ticks / 4.0`)：
-     训练器每决策步获得的奖励以及触球瞬间剩余帧折算步数精确到单物理帧 (1/120s)，
-     与 120Hz Tuner 面板及离线 CSV 重算 100% 严格相等。
-  3. 跨版本权重 Critic 预热校准 (`--vf-warmup 2`)：
-     加载已有 checkpoint 继续训练时，前 N 个 PPO 更新仅校准 Critic 价值网络 (`vf_only=True`)，
-     防止奖励函数参数调整初期未校准的 TD 误差破坏已学好的高速 Actor 策略。
-"""
 import os, sys, time, random, math, argparse, itertools
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -21,18 +9,17 @@ from collections import deque
 from core.constants import (
     OBS_V3_DIM, PPO_HIDDEN_DIM, PPO_ACTION_DIMS,
     TICKS_PER_DECISION, MAX_DECISIONS_STAGE0,
-    POST_TOUCH_STEPS, KICKOFF_SETTLE_TICKS,
+    POST_TOUCH_STEPS,
 )
 from core.nn import ActorCritic, multi_discrete_to_controls
 from core.obs_v3 import build_obs_v3
-from core.env import KickoffEnv
+from core.env import BallReachEnv
 from core.reward import RewardConfig, compute_step_reward
 from train.ppo import RolloutBuffer, ppo_update, get_device
 from train.checkpoint import (
     ensure_dir, save_ckpt, load_ckpt, BestTracker, ckpt_paths,
 )
 
-# ---- 默认 PPO 超参 ----
 GAMMA            = 0.995
 GAE_LAMBDA       = 0.95
 ROLLOUT_STEPS    = int(os.environ.get("ROLLOUT_STEPS", "2048"))
@@ -92,7 +79,6 @@ def main():
     args = parse_args()
     ensure_dir()
 
-    # 统一规范模式名称 (stage0 -> ground, stage1 -> target)
     if args.mode == "stage0":
         args.mode = "ground"
     elif args.mode == "stage1":
@@ -105,10 +91,10 @@ def main():
 
     read_prefix = args.prefix if args.prefix is not None else f"{args.mode}_v0"
     save_prefix = args.save_prefix if args.save_prefix is not None else read_prefix
-    latest_save_path, best_save_path = ckpt_paths(save_prefix, default_mode=args.mode, resolve_legacy=False)
-    read_latest_path, read_best_path = ckpt_paths(read_prefix, default_mode=args.mode, resolve_legacy=True)
+    latest_save_path, best_save_path = ckpt_paths(save_prefix, default_mode=args.mode)
+    read_latest_path, read_best_path = ckpt_paths(read_prefix, default_mode=args.mode)
 
-    env = KickoffEnv(mode=args.mode)
+    env = BallReachEnv(mode=args.mode)
     arena = env.arena
 
     model = ActorCritic(obs_dim=OBS_V3_DIM, hidden=PPO_HIDDEN_DIM, action_dims=PPO_ACTION_DIMS).to(device)
@@ -167,8 +153,8 @@ def main():
     ep_limit_str = "INF (Ctrl+C to stop)" if args.episodes <= 0 else str(args.episodes)
     lr_cycle = args.episodes if args.episodes > 0 else args.lr_period
 
-    print(f"[ppo] mode={args.mode} settle_ticks={KICKOFF_SETTLE_TICKS} "
-          f"max_dec={max_ep_decisions} ({max_ep_decisions*TICKS_PER_DECISION} active ticks + {KICKOFF_SETTLE_TICKS} settle = {max_ep_decisions*TICKS_PER_DECISION + KICKOFF_SETTLE_TICKS} total ticks) "
+    print(f"[ppo] mode={args.mode} "
+          f"max_dec={max_ep_decisions} ({max_ep_decisions*TICKS_PER_DECISION} ticks) "
           f"| episodes={ep_limit_str} rollout={args.rollout_steps} ent={args.ent_coef:.4f} sym={args.sym_coef:.2f} lr={args.lr_max:.2e}->{args.lr_min:.2e} "
           f"| save: latest={latest_save_path}, best={best_save_path}")
 

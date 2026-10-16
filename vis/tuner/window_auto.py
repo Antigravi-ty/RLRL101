@@ -1,4 +1,3 @@
-"""AUTO 模式：切换 / 重载 / 自动重置。支持 latest / best 两个 ckpt 及 prefix。"""
 import os
 
 from core.reward import RewardConfig
@@ -10,7 +9,7 @@ AUTO_RESET_DELAY = 0.5
 class AutoMixin:
     def _current_ckpt(self):
         prefix = getattr(self, "ckpt_prefix", "ground_v0")
-        latest, best = ckpt_paths(prefix, resolve_legacy=True)
+        latest, best = ckpt_paths(prefix)
         target = best if getattr(self, "ckpt_source", "best") == "best" else latest
         if not os.path.exists(target):
             alt = latest if getattr(self, "ckpt_source", "best") == "best" else best
@@ -23,7 +22,6 @@ class AutoMixin:
             self.use_auto = False
             self._pending_reset = None
             cur_plot_mode = getattr(self, "plot_mode", 1)
-            # ★ 切换到 HUMAN 时自动保留当前场景 (replay_last=True)，方便与 MODEL 同场景对比！
             self.session.reset(replay_last=True)
             self.session.plot_mode = cur_plot_mode
             self.trail.clear(); self.plot.clear(); self.obs_panel.clear()
@@ -48,7 +46,6 @@ class AutoMixin:
         self.use_auto = True
         self._pending_reset = None
         self.auto_session.plot_mode = cur_plot_mode
-        # ★ 切换到 MODEL 时，若当前场景 mode 与模型训练 mode 一致（含 ground/stage0、target/stage1 等价兼容），则直接在同场景下运行 MODEL！
         sp_m = (self.env.last_spawn_state or {}).get("mode")
         env_m = self.env.mode
         norm_sp = "ground" if sp_m == "stage0" else ("target" if sp_m == "stage1" else sp_m)

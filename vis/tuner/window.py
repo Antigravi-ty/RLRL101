@@ -1,11 +1,10 @@
-"""RewardTuner 主窗口——把各模块粘在一起。"""
 import sys
 import os
 import time
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore, QtWidgets
 
-from core.env import KickoffEnv
+from core.env import BallReachEnv
 from core.reward import RewardConfig
 from core.obs_v2 import GROUP_ORDER
 from .ui_constants import (
@@ -37,7 +36,7 @@ class RewardTuner(UIMixin, KeysMixin, ViewsMixin, RenderMixin, AutoMixin,
         if prefix is None:
             newest, newest_mt = "ground_v0", -1
             for p in prefixes:
-                lp, bp = ckpt_paths(p, resolve_legacy=True)
+                lp, bp = ckpt_paths(p)
                 for path in (lp, bp):
                     if os.path.exists(path):
                         mt = os.path.getmtime(path)
@@ -72,7 +71,7 @@ class RewardTuner(UIMixin, KeysMixin, ViewsMixin, RenderMixin, AutoMixin,
         self.resize(1600, 900)
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
 
-        self.env = KickoffEnv()
+        self.env = BallReachEnv()
         self.session = Session(self.env, RewardConfig())
         self.session.plot_mode = self.plot_mode
         self.keys = {k: False for k in KEY_NAMES}

@@ -1,0 +1,231 @@
+"""PPO 组件：RolloutBuffer (支持 GAE 广义优势估计) 与 单步更新器。
+纯 PyTorch + NumPy 极简实现（CleanRL 风格），完全透明，支持 CPU / Apple Silicon MPS / CUDA。
+"""
+import numpy as np
+import torch
+import torch.nn as nn
+
+
+def get_device(prefer_mps=True):
+    """自动选择最优计算设备：M1/M2/M3 Mac 自动启用 MPS 或 CPU，Linux/Win 自动选 CUDA 或 CPU。"""
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    # 对于小型 MLP (256 维)，在部分步进频繁的 RL 场景中 CPU 甚至比 MPS 跨设备拷贝更快；
+    # 这里提供环境变量 USE_MPS=1 显式开启 MPS，默认在 M1 CPU 上也能跑到 2000+ FPS。
+    import os
+    if prefer_mps and os.environ.get("USE_MPS", "0") == "1":
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return torch.device("mps")
+    return torch.device("cpu")
+
+
+class RolloutBuffer:
+    """PPO 在线轨迹缓冲区，支持多离散动作空间 (n_steps, 6) 与 GAE 计算。"""
+
+    def __init__(self, n_steps, obs_dim, action_channels=6):
+        self.n_steps = int(n_steps)
+        self.obs_dim = int(obs_dim)
+        self.action_channels = int(action_channels)
+        self.reset()
+
+    def reset(self):
+        self.obs      = np.zeros((self.n_steps, self.obs_dim), dtype=np.float32)
+        self.actions  = np.zeros((self.n_steps, self.action_channels), dtype=np.int64)
+        self.logprobs = np.zeros(self.n_steps, dtype=np.float32)
+        self.rewards  = np.zeros(self.n_steps, dtype=np.float32)
+        self.dones    = np.zeros(self.n_steps, dtype=np.float32)
+        self.values   = np.zeros(self.n_steps, dtype=np.float32)
+        self.advantages = np.zeros(self.n_steps, dtype=np.float32)
+        self.returns    = np.zeros(self.n_steps, dtype=np.float32)
+        self.ptr = 0
+
+    def add(self, obs, action, logprob, reward, done, value):
+        if self.ptr >= self.n_steps:
+            return
+        self.obs[self.ptr]      = obs
+        self.actions[self.ptr]  = action
+        self.logprobs[self.ptr] = float(logprob)
+        self.rewards[self.ptr]  = float(reward)
+        self.dones[self.ptr]    = float(done)
+        self.values[self.ptr]   = float(value)
+        self.ptr += 1
+
+    def is_full(self):
+        return self.ptr >= self.n_steps
+
+    def compute_returns_and_advantages(self, last_value, gamma=0.995, gae_lambda=0.95, reward_scale=0.05):
+        """计算广义优势估计 (GAE)。
+        注意：原始 step 奖励在触球瞬间高达 +100~500，通过 reward_scale (默认 0.05) 缩放，
+        能显著稳定 Critic 价值网络的回归梯度，同时完全不改变原始日志与 CSV 展示的分数！
+        """
+        last_gae_lam = 0.0
+        n = self.ptr
+        scaled_rewards = self.rewards[:n] * reward_scale
+        for t in reversed(range(n)):
+            if t == n - 1:
+                next_non_terminal = 1.0 - self.dones[t]
+                next_val = float(last_value)
+            else:
+                next_non_terminal = 1.0 - self.dones[t]
+                next_val = self.values[t + 1]
+            delta = scaled_rewards[t] + gamma * next_val * next_non_terminal - self.values[t]
+            last_gae_lam = delta + gamma * gae_lambda * next_non_terminal * last_gae_lam
+            self.advantages[t] = last_gae_lam
+        self.returns[:n] = self.advantages[:n] + self.values[:n]
+
+
+def _channel_kl_loss(student_logits, teacher_logits_detached, slices):
+    """按 6 个独立动作通道计算 KL(teacher || student)，梯度仅流向 student_logits。"""
+    import torch.nn.functional as F
+    kl_sum = 0.0
+    for (s, e) in slices:
+        log_p_student = F.log_softmax(student_logits[:, s:e], dim=-1)
+        log_p_teacher = F.log_softmax(teacher_logits_detached[:, s:e], dim=-1)
+        p_teacher = log_p_teacher.exp()
+        # KL(P_teacher || P_student) = sum P_teacher * (log P_teacher - log P_student)
+        kl_ch = (p_teacher * (log_p_teacher - log_p_student)).sum(dim=-1)
+        kl_sum = kl_sum + kl_ch
+    return kl_sum
+
+
+def ppo_update(
+    model,
+    optimizer,
+    buffer: RolloutBuffer,
+    ppo_epochs=4,
+    minibatch_size=256,
+    clip_coef=0.2,
+    ent_coef=0.005,
+    vf_coef=0.5,
+    sym_coef=0.02,
+    augment_symmetry=True,
+    max_grad_norm=0.5,
+    vf_only=False,
+    device=torch.device("cpu"),
+):
+    """执行一次完整的 PPO 多 Epoch 小批量更新，内置【价值引导左右镜像对称蒸馏】。
+    当 vf_only=True 时（用于加载跨版本权重后的前几步 Critic 预热校准），仅更新 Critic 价值网络而不改动 Actor。
+    """
+    from core.obs_v3 import mirror_obs_v3_torch, mirror_logits_torch
+
+    n = buffer.ptr
+    b_obs      = torch.from_numpy(buffer.obs[:n]).to(device)
+    b_actions  = torch.from_numpy(buffer.actions[:n]).to(device)
+    b_logprobs = torch.from_numpy(buffer.logprobs[:n]).to(device)
+    b_adv      = torch.from_numpy(buffer.advantages[:n]).to(device)
+    b_returns  = torch.from_numpy(buffer.returns[:n]).to(device)
+    b_values   = torch.from_numpy(buffer.values[:n]).to(device)
+
+    if augment_symmetry and sym_coef > 0.0:
+        b_obs_m = mirror_obs_v3_torch(b_obs)
+
+    inds = np.arange(n)
+    clipfracs = []
+    pg_losses, v_losses, ent_losses, sym_losses, approx_kls = [], [], [], [], []
+
+    for _ in range(ppo_epochs):
+        np.random.shuffle(inds)
+        for start in range(0, n, minibatch_size):
+            end = start + minibatch_size
+            mb_inds = inds[start:end]
+
+            mb_obs = b_obs[mb_inds]
+            mb_act = b_actions[mb_inds]
+            mb_adv_raw = b_adv[mb_inds]
+
+            if vf_only:
+                newvalue = model.get_value(mb_obs)
+                v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+                loss = vf_coef * v_loss
+                optimizer.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(model.critic.parameters(), max_grad_norm)
+                optimizer.step()
+                pg_losses.append(0.0)
+                v_losses.append(v_loss.item())
+                ent_losses.append(0.0)
+                approx_kls.append(0.0)
+                clipfracs.append(0.0)
+                continue
+
+            _, newlogprob, entropy, newvalue = model.get_action_and_value(mb_obs, mb_act)
+            logratio = newlogprob - b_logprobs[mb_inds]
+            ratio = logratio.exp()
+
+            with torch.no_grad():
+                approx_kl = ((ratio - 1.0) - logratio).mean().item()
+                approx_kls.append(approx_kl)
+                clipfracs.append(((ratio - 1.0).abs() > clip_coef).float().mean().item())
+
+            if mb_adv_raw.numel() > 1:
+                mb_advantages = (mb_adv_raw - mb_adv_raw.mean()) / (mb_adv_raw.std() + 1e-8)
+            else:
+                mb_advantages = mb_adv_raw
+
+            # Policy loss (Clipped Surrogate Objective)
+            pg_loss1 = -mb_advantages * ratio
+            pg_loss2 = -mb_advantages * torch.clamp(ratio, 1.0 - clip_coef, 1.0 + clip_coef)
+            pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+
+            # Value loss
+            v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+
+            # ---- 价值引导左右镜像对称蒸馏 ----
+            sym_loss = torch.tensor(0.0, device=device)
+            if augment_symmetry and sym_coef > 0.0:
+                mb_obs_m = b_obs_m[mb_inds]
+
+                logits_orig = model.apply_action_mask(model.actor(mb_obs), mb_obs, ch4_action=mb_act[:, 4])
+                logits_mirr = model.apply_action_mask(model.actor(mb_obs_m), mb_obs_m, ch4_action=mb_act[:, 4])
+                v_orig = newvalue
+                v_mirr = model.get_value(mb_obs_m)
+
+                off_center = ((mb_obs[:, 0] - mb_obs[:, 1]).abs() > 0.015).float()
+
+                orig_better = (v_orig.detach() >= v_mirr.detach()).float()
+                mirr_better = 1.0 - orig_better
+
+                target_for_mirr = mirror_logits_torch(logits_orig.detach())
+                target_for_orig = mirror_logits_torch(logits_mirr.detach())
+
+                kl_to_mirr = _channel_kl_loss(logits_mirr, target_for_mirr, model._slices)
+                kl_to_orig = _channel_kl_loss(logits_orig, target_for_orig, model._slices)
+                sym_kl = (off_center * (orig_better * kl_to_mirr + mirr_better * kl_to_orig)).sum() / (off_center.sum() + 1e-8)
+
+                v_sym = 0.5 * (
+                    off_center * (
+                        orig_better * ((v_mirr - v_orig.detach()) ** 2)
+                        + mirr_better * ((v_orig - v_mirr.detach()) ** 2)
+                    )
+                ).sum() / (off_center.sum() + 1e-8)
+
+                sym_loss = sym_kl + 0.25 * v_sym
+                sym_losses.append(sym_loss.item())
+
+            # Entropy bonus
+            entropy_loss = entropy.mean()
+            loss = pg_loss - ent_coef * entropy_loss + vf_coef * v_loss + sym_coef * sym_loss
+
+            optimizer.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            optimizer.step()
+
+            pg_losses.append(pg_loss.item())
+            v_losses.append(v_loss.item())
+            ent_losses.append(entropy_loss.item())
+
+    # Explained variance (诊断 Critic 是否真正理解局面价值)
+    y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
+    var_y = np.var(y_true)
+    explained_var = np.nan if var_y == 0 else float(1.0 - np.var(y_true - y_pred) / (var_y + 1e-8))
+
+    return {
+        "pg_loss":       float(np.mean(pg_losses)),
+        "v_loss":        float(np.mean(v_losses)),
+        "entropy":       float(np.mean(ent_losses)),
+        "sym_loss":      float(np.mean(sym_losses)) if sym_losses else 0.0,
+        "approx_kl":     float(np.mean(approx_kls)),
+        "clipfrac":      float(np.mean(clipfracs)),
+        "explained_var": explained_var,
+    }

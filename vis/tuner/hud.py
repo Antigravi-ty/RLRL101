@@ -1,0 +1,149 @@
+"""HUD / 状态文本格式化 (纯 PPO 6 通道概率/Value 视图 + 显式按键展示)。"""
+import numpy as np
+from core.obs_v2 import OBS_V2_GROUPS
+from .ui_constants import STATE_PLAYBACK, STATE_DONE, RECORD_LIMIT
+
+
+def _is_auto(session):
+    return hasattr(session, "last_ppo_probs")
+
+
+def _fmt_obs_group(fr, group_name):
+    parts = fr.get("obs_parts") if isinstance(fr, dict) else None
+    if not parts or group_name not in parts:
+        return ""
+    _, _, labels = OBS_V2_GROUPS[group_name]
+    vals = parts[group_name]
+    lines = [f"==== {group_name} (raw) ===="]
+    for l, v in zip(labels, vals):
+        lines.append(f"  {l:>10} = {float(v):+10.3f}")
+    return "\n".join(lines) + "\n"
+
+
+def _fmt_flags(fr):
+    if not isinstance(fr, dict):
+        return ""
+    fl = fr.get("flags")
+    if not fl:
+        return ""
+    line1 = (f"on_ground={int(fl['on_ground'])}  "
+             f"jumping={int(fl['is_jumping'])}  "
+             f"flipping={int(fl['is_flipping'])}  "
+             f"auto_flip={int(fl['auto_flip'])}  "
+             f"has_flipped={int(fl['has_flipped'])}")
+    line2 = (f"has_djump={int(fl['has_djump'])}  "
+             f"flip_or_jump={int(fl['flip_or_jump'])}  "
+             f"flip_reset={int(fl['flip_reset'])}  "
+             f"world_cont={int(fl['world_cont'])}")
+    line3 = (f"air_t={fl['air_time']:.3f}  "
+             f"flip_t={fl['flip_time']:.3f}  "
+             f"jump_t={fl['jump_time']:.3f}  "
+             f"boost_t={fl['boost_time']:.2f}")
+    return f"---- flags ----\n{line1}\n{line2}\n{line3}\n"
+
+
+def format_hud(session, current_boost, obs_group=None):
+    boost_line = f"BOOST: {current_boost:5.1f}"
+    frames = session.frames
+    is_auto = _is_auto(session)
+
+    if session.state in (STATE_PLAYBACK, STATE_DONE) and frames:
+        fr = frames[session.playback_idx]
+        d = fr["detail"]
+        fwd = fr.get("fwd",   (0, 0, 0))
+        up  = fr.get("up",    (0, 0, 0))
+        rgt = fr.get("right", (0, 0, 0))
+        closing = fr.get("closing", 0.0)
+        peak = d.get("peak_closing", 0.0)
+        accum = d.get("closing_accum", 0.0)
+        keys_str = fr["input"].get("keys_str", "")
+        ch_list  = fr["input"].get("ppo_channels", [])
+        body = (
+            f"{'AUTO' if is_auto else 'PLAYBACK'}  "
+            f"i={fr['i']}/{len(frames)-1}  "
+            f"速度 {int(session.speed*100)}%\n"
+            f"keys:  [{keys_str}]  ch={ch_list}\n"
+            f"input: thr={fr['input']['thr']:+.0f} str={fr['input']['str']:+.0f} "
+            f"ptc={fr['input']['ptc']:+.0f} yaw={fr['input']['yaw']:+.0f}\n"
+            f"       roll={fr['input']['roll']:+.0f} "
+            f"jump={int(fr['input']['jump'])} boost={int(fr['input']['boost'])} "
+            f"hb={int(fr['input'].get('handbrake', False))}\n"
+            f"car:   pos=({fr['car_pos'][0]:.0f},{fr['car_pos'][1]:.0f},"
+            f"{fr['car_pos'][2]:.0f})\n"
+            f"       up_z={fr['up_z']:.2f} air={fr['air_time']:.2f} "
+            f"flip={int(fr['is_flipping'])} boost={fr['boost']:.1f}\n"
+            f"axes:  fwd=({fwd[0]:+.2f},{fwd[1]:+.2f},{fwd[2]:+.2f})\n"
+            f"       up =({up[0]:+.2f},{up[1]:+.2f},{up[2]:+.2f})\n"
+            f"       rgt=({rgt[0]:+.2f},{rgt[1]:+.2f},{rgt[2]:+.2f})\n"
+            f"ball:  pos=({fr['ball_pos'][0]:.0f},{fr['ball_pos'][1]:.0f},"
+            f"{fr['ball_pos'][2]:.0f})\n"
+            f"dist:  {fr['dist']:.1f}  (h={fr['dist_h']:.1f})  "
+            f"align={fr['align']:+.2f}\n"
+            f"closing: {closing:+.1f}  peak={peak:+.1f}  accum={accum:+.1f}\n"
+            f"---- reward ----\n"
+            f"r_dist     = {d.get('r_dist', 0):+8.3f}\n"
+            f"r_time     = {d.get('r_time', 0):+8.3f}\n"
+            f"r_align    = {d.get('r_align', 0):+8.3f}\n"
+            f"r_progress = {d.get('r_progress', 0):+8.3f}\n"
+            f"r_cl_bonus = {d.get('r_closing_bonus', 0):+8.3f}\n"
+            f"r_bst_wast = {d.get('r_boost_waste', 0):+8.3f} (wasted={getattr(session, 'boost_wasted_total', 0.0):.1f}f)\n"
+            f"r_bst_used = {d.get('r_boost_used', 0):+8.3f} (used={getattr(session, 'boost_used_total', 0.0):.1f})\n"
+            f"r_touch    = {d.get('r_touch', 0):+8.3f} (gvel={d.get('r_goal_vel', 0):+.2f})\n"
+            f"r_tgt_cpa  = {d.get('r_target_cpa', 0):+8.3f} (d={d.get('cpa_dist', 0):.0f} dt={d.get('cpa_time_err', 0):.2f}s)\n"
+            f"r_timeout  = {d.get('r_timeout', 0):+8.3f}\n"
+            f"r_total    = {fr['r_total']:+8.3f}\n"
+            f"r_cum      = {fr['r_cum']:+8.3f}\n"
+        )
+        body += _fmt_flags(fr)
+        if obs_group:
+            body += _fmt_obs_group(fr, obs_group)
+        if is_auto:
+            body += _model_block(session, fr)
+        return boost_line, body
+
+    if frames:
+        fr = frames[-1]
+        d = fr["detail"]
+        closing = fr.get("closing", 0.0)
+        peak = d.get("peak_closing", 0.0)
+        accum = d.get("closing_accum", 0.0)
+        keys_str = fr["input"].get("keys_str", "")
+        body = (
+            f"{'AUTO' if is_auto else 'RECORDING'}  "
+            f"i={fr['i']}/{RECORD_LIMIT}  r_cum={fr['r_cum']:+.3f}\n"
+            f"keys: [{keys_str}]\n"
+            f"dist={fr['dist']:.1f}  align={fr['align']:+.2f}\n"
+            f"closing={closing:+.1f}  peak={peak:+.1f}  accum={accum:+.1f}\n"
+            f"boost={fr['boost']:.1f} (wasted={getattr(session, 'boost_wasted_total', 0.0):.1f}f)  "
+            f"air={fr['air_time']:.2f}  flip={int(fr['is_flipping'])}\n"
+        )
+        body += _fmt_flags(fr)
+        if obs_group:
+            body += _fmt_obs_group(fr, obs_group)
+        if is_auto:
+            body += _model_block(session, fr)
+        return boost_line, body
+
+    return boost_line, "按任一操作键开始录制  (M: 切换 MODEL/HUMAN)  (F: FREERUN)"
+
+
+def _model_block(session, fr=None):
+    probs = fr.get("ppo_probs") if isinstance(fr, dict) and fr.get("ppo_probs") is not None else getattr(session, "last_ppo_probs", None)
+    val = fr.get("ppo_value") if isinstance(fr, dict) and fr.get("ppo_value") is not None else getattr(session, "last_ppo_value", 0.0)
+    act = fr["input"].get("ppo_channels") if isinstance(fr, dict) and "ppo_channels" in fr.get("input", {}) else getattr(session, "current_ppo_action", [1, 1, 1, 0, 0, 0])
+    if probs is None:
+        return "\n---- PPO model (waiting) ----\n"
+    p_ws = probs[0]
+    p_ad = probs[1]
+    p_qe = probs[2]
+    p_jp = probs[3][1]
+    p_bs = probs[4][1]
+    p_hb = probs[5][1]
+    return (
+        f"\n---- PPO Multi-Discrete (V={val:+.2f}) ----\n"
+        f"act={list(act)}  mode={getattr(session.env, 'mode', 'ground')}\n"
+        f"W/0/S: W={p_ws[2]:.0%} 0={p_ws[1]:.0%} S={p_ws[0]:.0%}\n"
+        f"A/0/D: A={p_ad[0]:.0%} 0={p_ad[1]:.0%} D={p_ad[2]:.0%}\n"
+        f"Q/0/E: Q={p_qe[0]:.0%} 0={p_qe[1]:.0%} E={p_qe[2]:.0%}\n"
+        f"Jump={p_jp:.0%}  Boost={p_bs:.0%}  Slide={p_hb:.0%}\n"
+    )

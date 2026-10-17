@@ -280,7 +280,7 @@ class CurriculumTracker:
         # Special handling for Static Aerial sub-curriculum (Stages 5 & 6, indices 4 & 5)
         if self.stage_level in (5, 6):
             ast = self.aerial_state
-            if len(self.high_band_window) >= 50:
+            if len(self.high_band_window) >= 100:
                 hb_rate = sum(self.high_band_window) / len(self.high_band_window)
                 if hb_rate >= self.unlock_threshold - 1e-6:
                     if ast.phase == 0:
@@ -305,19 +305,22 @@ class CurriculumTracker:
                             ast.high_band_total = 0
                             return f"[aerial-ladder] Z=2000 mastered -> Phase 2: CSV Boost +30 margin"
                     elif ast.phase == 2:
-                        if ast.boost_margin >= 12:
-                            ast.boost_margin -= 12
+                        if ast.boost_margin > 0:
+                            ast.boost_margin = max(0, ast.boost_margin - 12)
                             self.high_band_window.clear()
                             ast.high_band_touches = 0
                             ast.high_band_total = 0
                             return f"[aerial-ladder] CSV Boost margin reduced by 12 -> +{ast.boost_margin:02d}"
                         else:
-                            # Completed aerial ladder! Unlock next stage!
-                            pass
-            # Only advance from stage 5->6 or 6->7 if phase 0 is at least cleared or ladder completed
-            if self.stage_level == 5 and ast.phase == 0 and len(self.high_band_window) < 50:
+                            ast.phase = 3
+                            self.high_band_window.clear()
+                            ast.high_band_touches = 0
+                            ast.high_band_total = 0
+                            return "[aerial-ladder] CSV +00 mastered -> Static Aerial Ladder DONE!"
+            # Gate stage 5->6 on clearing at least Z<=400 (phase>=1), and stage 6->7 (Dynamic Aerial) on completing the full ladder (phase>=3)
+            if self.stage_level == 5 and ast.phase < 1:
                 return None
-            if self.stage_level == 6 and not (ast.phase == 2 and ast.boost_margin < 12):
+            if self.stage_level == 6 and ast.phase < 3:
                 return None
 
         if self.stage_level < NUM_CURRICULUM_STAGES:

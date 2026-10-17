@@ -55,8 +55,10 @@ class AerialCurriculumState:
             z_lo = int(round(self.max_z - 100.0))
             z_hi = int(round(self.max_z))
             return f"Z{z_hi:04d}[{z_lo}-{z_hi}:{self.high_band_touches}/{self.high_band_total}={hb_rate:.0%}]_B100"
-        else:
+        elif self.phase == 2:
             return f"Z2000_CSV+{self.boost_margin:02d}({self.high_band_touches}/{self.high_band_total}={hb_rate:.0%})"
+        else:
+            return "Z2000_DONE"
 
 
 STAGE_NAMES = (
@@ -475,6 +477,9 @@ class BallReachEnv:
                 if self.aerial_state.phase == 1 and max_z > 400.0 and rng.random() < 0.45:
                     # Ensure ample sampling in the top [max_z-100, max_z] examination band
                     bz = rng.uniform(max(400.0, max_z - 100.0), max_z)
+                elif self.aerial_state.phase == 2 and rng.random() < 0.50:
+                    # Ensure ample sampling of high balls (>500) during CSV +margin ladder
+                    bz = rng.uniform(500.1, 2000.0)
                 elif self.aerial_state.phase == 0 and rng.random() < 0.35:
                     # Smooth single-jump to double-jump bootstrap band (strictly requires jump)
                     bz = rng.uniform(145.0, 230.0)
@@ -483,7 +488,7 @@ class BallReachEnv:
                 self.is_high_band_sample = (
                     (self.aerial_state.phase == 0 and bz <= 400.0)
                     or (self.aerial_state.phase == 1 and (max_z - 100.0) <= bz <= max_z)
-                    or (self.aerial_state.phase >= 2 and bz >= 500.0)
+                    or (self.aerial_state.phase >= 2 and bz > 500.0)
                 )
                 bvx, bvy, bvz = 0.0, 0.0, 0.0
                 self.hover_ball_pos = (float(bx), float(by), float(bz))

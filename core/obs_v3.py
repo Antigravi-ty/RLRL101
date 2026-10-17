@@ -4,10 +4,58 @@ from .obs_v2 import (
     S_FACE, S_CAR_ANG, S_CAR_VEL, S_BALL_POS, S_BALL_VEL, S_BALL_ANG, S_CLOSING,
     build_obs_v2, _v,
 )
-from .constants import OBS_V3_DIM
+from .constants import OBS_V3_DIM, NUM_BOOST_PADS
+
+BOOST_PAD_LOCATIONS = np.array([
+    (    0.0, -4240.0, 70.0),
+    (-1792.0, -4184.0, 70.0),
+    ( 1792.0, -4184.0, 70.0),
+    (-3072.0, -4096.0, 73.0),
+    ( 3072.0, -4096.0, 73.0),
+    ( -940.0, -3308.0, 70.0),
+    (  940.0, -3308.0, 70.0),
+    (    0.0, -2816.0, 70.0),
+    (-3584.0, -2484.0, 70.0),
+    ( 3584.0, -2484.0, 70.0),
+    (-1788.0, -2300.0, 70.0),
+    ( 1788.0, -2300.0, 70.0),
+    (-2048.0, -1036.0, 70.0),
+    (    0.0, -1024.0, 70.0),
+    ( 2048.0, -1036.0, 70.0),
+    (-3584.0,     0.0, 73.0),
+    (-1024.0,     0.0, 70.0),
+    ( 1024.0,     0.0, 70.0),
+    ( 3584.0,     0.0, 73.0),
+    (-2048.0,  1036.0, 70.0),
+    (    0.0,  1024.0, 70.0),
+    ( 2048.0,  1036.0, 70.0),
+    (-1788.0,  2300.0, 70.0),
+    ( 1788.0,  2300.0, 70.0),
+    (-3584.0,  2484.0, 70.0),
+    ( 3584.0,  2484.0, 70.0),
+    (    0.0,  2816.0, 70.0),
+    ( -940.0,  3308.0, 70.0),
+    (  940.0,  3308.0, 70.0),
+    (-3072.0,  4096.0, 73.0),
+    ( 3072.0,  4096.0, 73.0),
+    (-1792.0,  4184.0, 70.0),
+    ( 1792.0,  4184.0, 70.0),
+    (    0.0,  4240.0, 70.0),
+], dtype=np.float32)
 
 BIG_PAD_INDICES = (3, 4, 15, 18, 29, 30)
 BIG_PAD_COOLDOWN = 10.0
+SMALL_PAD_COOLDOWN = 4.0
+
+PAD_COOLDOWN_SCALES = np.array([
+    BIG_PAD_COOLDOWN if i in BIG_PAD_INDICES else SMALL_PAD_COOLDOWN
+    for i in range(NUM_BOOST_PADS)
+], dtype=np.float32)
+
+PAD_MIRROR_PAIRS = (
+    (1, 2), (3, 4), (5, 6), (8, 9), (10, 11), (12, 14), (15, 18),
+    (16, 17), (19, 21), (22, 23), (24, 25), (27, 28), (29, 30), (31, 32),
+)
 
 OPP_GOAL_POS = np.array([0.0, 5120.0, 320.0], dtype=np.float32)
 OWN_GOAL_POS = np.array([0.0, -5120.0, 320.0], dtype=np.float32)
@@ -84,18 +132,21 @@ def build_obs_v3(car, arena, intent_override=None, target_pos=None, target_time=
     ], dtype=np.float32) / S_BALL_POS
 
     pads = arena.get_boost_pads()
-    big_pads_feat = np.zeros(24, dtype=np.float32)
-    for idx_k, pad_idx in enumerate(BIG_PAD_INDICES):
-        if pad_idx < len(pads):
-            p = pads[pad_idx]
-            p_pos = _v(p.get_pos())
-            ps = p.get_state()
-            rel_p = p_pos - car_pos
-            base = idx_k * 4
-            big_pads_feat[base + 0] = float(np.dot(rel_p, fwd)) / S_FACE
-            big_pads_feat[base + 1] = float(np.dot(rel_p, right)) / S_FACE
-            big_pads_feat[base + 2] = 1.0 if ps.is_active else 0.0
-            big_pads_feat[base + 3] = float(ps.cooldown) / BIG_PAD_COOLDOWN
+    rel_pads = BOOST_PAD_LOCATIONS - car_pos[None, :]
+    pads_fwd = (rel_pads @ fwd) / S_FACE
+    pads_rgt = (rel_pads @ right) / S_FACE
+    pads_active = np.empty(NUM_BOOST_PADS, dtype=np.float32)
+    pads_cd = np.empty(NUM_BOOST_PADS, dtype=np.float32)
+    for idx_k, p in enumerate(pads):
+        ps = p.get_state()
+        pads_active[idx_k] = 1.0 if ps.is_active else 0.0
+        pads_cd[idx_k] = float(ps.cooldown) / PAD_COOLDOWN_SCALES[idx_k]
+
+    all_pads_feat = np.empty(NUM_BOOST_PADS * 4, dtype=np.float32)
+    all_pads_feat[0::4] = pads_fwd
+    all_pads_feat[1::4] = pads_rgt
+    all_pads_feat[2::4] = pads_active
+    all_pads_feat[3::4] = pads_cd
 
     if intent_override is not None:
         intent_vec = np.asarray(intent_override, dtype=np.float32)
@@ -113,7 +164,7 @@ def build_obs_v3(car, arena, intent_override=None, target_pos=None, target_time=
         car_orient_z,
         ball_faces,
         goals_rel_b,
-        big_pads_feat,
+        all_pads_feat,
         intent_vec,
     ]).astype(np.float32)
 
@@ -121,6 +172,7 @@ def build_obs_v3(car, arena, intent_override=None, target_pos=None, target_time=
     parts["I.car_orient"] = car_orient_z
     parts["J.ball_faces"] = ball_faces * S_FACE
     parts["K.goals_rel_b"] = goals_rel_b * S_BALL_POS
+    parts["L.all_pads_b"] = all_pads_feat
     parts["M.intent"] = intent_vec
     return obs_v3, obs_v2, parts
 
@@ -133,8 +185,8 @@ OBS_V3_MIRROR_NEG_INDICES = (
     22, 23,
     32,
     41, 44,
-    47, 51, 55, 59, 63, 67,
-    72, 74,
+    *(46 + 4 * i + 1 for i in range(NUM_BOOST_PADS)),
+    184, 186,
 )
 
 
@@ -142,10 +194,12 @@ def _build_obs_v3_mirror_perm_and_sign():
     perm = np.arange(OBS_V3_DIM, dtype=np.int64)
     perm[0], perm[1] = 1, 0
     perm[34], perm[35] = 35, 34
-    for base in (46, 54, 62):
+    for i_left, i_right in PAD_MIRROR_PAIRS:
+        b_left = 46 + 4 * i_left
+        b_right = 46 + 4 * i_right
         for k in range(4):
-            perm[base + k] = base + 4 + k
-            perm[base + 4 + k] = base + k
+            perm[b_left + k] = b_right + k
+            perm[b_right + k] = b_left + k
 
     sign = np.ones(OBS_V3_DIM, dtype=np.float32)
     for idx in OBS_V3_MIRROR_NEG_INDICES:

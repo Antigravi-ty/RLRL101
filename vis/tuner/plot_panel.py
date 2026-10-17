@@ -11,6 +11,15 @@ MODE_NAMES = {
 }
 
 
+def _diff(ys):
+    if not ys:
+        return ys
+    out = [0.0]
+    for i in range(1, len(ys)):
+        out.append(ys[i] - ys[i - 1])
+    return out
+
+
 class RewardPlotPanel:
     def __init__(self, widget: pg.PlotWidget):
         self.widget = widget
@@ -45,10 +54,11 @@ class RewardPlotPanel:
     def set_cursor(self, idx):
         self.cursor_line.setPos(idx)
 
-    def update_mode(self, mode: int, frames):
+    def update_mode(self, mode: int, frames, delta: bool = False):
         if not frames:
             return
         xs = [f["i"] for f in frames]
+        fn = _diff if delta else (lambda v: v)
 
         self.curve_total.setData([], [])
         self.curve_cum.setData([], [])
@@ -56,23 +66,23 @@ class RewardPlotPanel:
         self.curve_dh.setData([], [])
 
         if mode == 1:
-            self.curve_total.setData(xs, [f["r_total"] for f in frames])
+            self.curve_total.setData(xs, fn([f["r_total"] for f in frames]))
         elif mode == 2:
-            self.curve_cum.setData(xs, [f["r_cum"] for f in frames])
+            self.curve_cum.setData(xs, fn([f["r_cum"] for f in frames]))
         elif mode == 3:
-            self.curve_dist.setData(xs, [f["dist"] for f in frames])
-            self.curve_dh.setData(xs, [f["dist_h"] for f in frames])
+            self.curve_dist.setData(xs, fn([f["dist"] for f in frames]))
+            self.curve_dh.setData(xs, fn([f["dist_h"] for f in frames]))
         elif mode == 4:
-            self.curve_total.setData(xs, [f["detail"].get("r_dist", 0) for f in frames])
-            self.curve_cum.setData(xs, [f["detail"].get("r_time", 0) for f in frames])
+            self.curve_total.setData(xs, fn([f["detail"].get("r_dist", 0) for f in frames]))
+            self.curve_cum.setData(xs, fn([f["detail"].get("r_time", 0) for f in frames]))
         elif mode == 5:
-            self.curve_total.setData(xs, [f["r_total"] for f in frames])
-            self.curve_cum.setData(xs, [f["r_cum"] for f in frames])
-            self.curve_dist.setData(xs, [f["dist"] for f in frames])
-            self.curve_dh.setData(xs, [f["dist_h"] for f in frames])
+            self.curve_total.setData(xs, fn([f["r_total"] for f in frames]))
+            self.curve_cum.setData(xs, fn([f["r_cum"] for f in frames]))
+            self.curve_dist.setData(xs, fn([f["dist"] for f in frames]))
+            self.curve_dh.setData(xs, fn([f["dist_h"] for f in frames]))
         elif mode == 6:
-            self.curve_total.setData(xs, [f.get("car_speed", 0.0) for f in frames])
-            self.curve_cum.setData(xs, [f.get("closing", 0.0) for f in frames])
+            self.curve_total.setData(xs, fn([f.get("car_speed", 0.0) for f in frames]))
+            self.curve_cum.setData(xs, fn([f.get("closing", 0.0) for f in frames]))
 
         self.widget.getViewBox().enableAutoRange(axis='y', enable=True)
         self.widget.getViewBox().autoRange()

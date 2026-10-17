@@ -1,4 +1,3 @@
-"""UI 布局：3D 视图 + 曲线面板 + 右侧状态栏。"""
 import numpy as np
 import pyqtgraph as pg
 import pyqtgraph.opengl as gl
@@ -10,14 +9,6 @@ from .obs_panel  import ObsPlotPanel
 
 
 class SpeedDividerBar(QtWidgets.QWidget):
-    """3D 场景与底部图表之间的 120Hz 实时车速进度条分隔线：
-    - 量程上限: 2300.0 uu/s (最右端)
-    - 3 条关键刻度竖线 (按正翻/斜翻 +500 uu/s 速度增益计算)：
-      1. 1700 (= 2200 - 500): 在此速度以上翻滚可直接突破超音速 (2200)
-      2. 1800 (= 2300 - 500): 在此速度以上翻滚可直接打满极速 (2300)
-      3. 2200 (Supersonic):   超音速临界线（带反色/高亮显示，突破 2200 或 is_supersonic 时变色）
-    - 当发生 Boost Wasted (满速或无效喷气) 时，右侧额外闪烁红色 WASTED 警示。
-    """
     MAX_SPEED = 2300.0
     MARKS = (
         (1700.0, "1700 (Flip→SS)"),
@@ -52,10 +43,8 @@ class SpeedDividerBar(QtWidgets.QWidget):
         if w <= 0 or h <= 0:
             return
 
-        # 1. 黑色背景底槽
         qp.fillRect(0, 0, w, h, QtGui.QColor(15, 15, 20))
 
-        # 2. 计算当前速度填充宽度
         ratio = min(1.0, max(0.0, self.speed / self.MAX_SPEED))
         fill_w = int(round(ratio * w))
         x_1700 = int(round((1700.0 / self.MAX_SPEED) * w))
@@ -63,32 +52,25 @@ class SpeedDividerBar(QtWidgets.QWidget):
 
         if fill_w > 0:
             if self.speed < 1700.0:
-                # 1700 以下：青蓝色常规加速区
                 bar_col = QtGui.QColor(0, 190, 240)
                 qp.fillRect(0, 0, fill_w, h, bar_col)
             elif not self.is_supersonic and self.speed < 2200.0:
-                # 1700 ~ 2200：翻滚可直达超音速黄金区间（翠绿->亮金）
                 qp.fillRect(0, 0, x_1700, h, QtGui.QColor(0, 160, 210))
                 qp.fillRect(x_1700, 0, fill_w - x_1700, h, QtGui.QColor(40, 225, 120))
             else:
-                # >= 2200 (超音速区间)：进度条主体变亮橙金，超过 2200 的部分采用醒目反色（洋红/亮白紫）！
                 qp.fillRect(0, 0, min(fill_w, x_2200), h, QtGui.QColor(255, 180, 0))
                 if fill_w > x_2200:
-                    # 突破 2200 后的反色高亮区
                     qp.fillRect(x_2200, 0, fill_w - x_2200, h, QtGui.QColor(255, 50, 220))
 
-        # 若当前帧判定为 Boost Wasted，在进度条顶部/右侧叠加红色警示框
         if self.boost_wasted:
             qp.fillRect(max(0, fill_w - 18), 0, min(w, 18), h, QtGui.QColor(255, 30, 30))
 
-        # 3. 绘制三条关键刻度竖线 (1700, 1800, 2200)，采用底色反色逻辑确保在任何进度下始终清晰可见
         font = QtGui.QFont("Consolas", 9, QtGui.QFont.Bold)
         qp.setFont(font)
         for mark_v, label in self.MARKS:
             mx = int(round((mark_v / self.MAX_SPEED) * w))
             covered = (fill_w >= mx)
             if mark_v >= 2200.0:
-                # 2200 超音速竖线：未覆盖时亮白色，被覆盖时反色为纯黑+亮青双线
                 line_col = QtGui.QColor(0, 0, 0) if covered else QtGui.QColor(255, 255, 255)
                 qp.setPen(QtGui.QPen(line_col, 3))
                 qp.drawLine(mx, 0, mx, h)
@@ -96,21 +78,17 @@ class SpeedDividerBar(QtWidgets.QWidget):
                     qp.setPen(QtGui.QPen(QtGui.QColor(0, 255, 255), 1))
                     qp.drawLine(mx - 2, 0, mx - 2, h)
             else:
-                # 1700 / 1800 翻滚区间竖线：未覆盖时亮黄/白，被覆盖时反色为深黑
                 line_col = QtGui.QColor(10, 10, 10) if covered else QtGui.QColor(255, 220, 80)
                 qp.setPen(QtGui.QPen(line_col, 2))
                 qp.drawLine(mx, 0, mx, h)
 
-            # 刻度文字标签
             txt_col = QtGui.QColor(15, 15, 15) if (covered and mx - 4 < fill_w) else QtGui.QColor(210, 210, 210)
             qp.setPen(txt_col)
             qp.drawText(mx + 4, h - 6, f"{int(mark_v)}")
 
-        # 4. 左侧实时显示精确车速数值与状态标签
         ss_tag = " [SUPERSONIC]" if self.is_supersonic else (" [FLIP->SS ZONE]" if self.speed >= 1700.0 else "")
         waste_tag = " !! BOOST WASTED !!" if self.boost_wasted else ""
         info_str = f" SPEED: {self.speed:6.1f} / 2300{ss_tag}{waste_tag}"
-        # 根据左侧文字所在位置是否被高亮度进度条覆盖，自动反色文字
         left_covered = (fill_w > 90 and self.speed >= 1700.0)
         qp.setPen(QtGui.QColor(10, 10, 10) if left_covered else QtGui.QColor(255, 255, 255))
         qp.drawText(6, h - 6, info_str)
@@ -196,7 +174,6 @@ class WrapAnywhereLabel(QtWidgets.QLabel):
 
     def paintEvent(self, event):
         from pyqtgraph.Qt import QtGui
-        # 1. 先让 QWidget/QFrame 绘制 stylesheet 中的背景与边框（临时清空文本避免默认单行绘制重叠）
         txt = self.text()
         opt_style = QtWidgets.QStyleOptionFrame()
         self.initStyleOption(opt_style)
@@ -205,7 +182,6 @@ class WrapAnywhereLabel(QtWidgets.QLabel):
             QtWidgets.QStyle.PrimitiveElement.PE_Widget, opt_style, qp, self
         )
 
-        # 2. 使用 WrapAnywhere 逐字符自动折行绘制文本
         pad, bdr = self._extract_padding_and_border()
         margin = pad + bdr
         rect = self.rect().adjusted(margin, margin, -margin, -margin)
@@ -254,7 +230,6 @@ class UIMixin:
         self.ball_scatter.setData(pos=np.zeros((1, 3)), color=(1.0, 0.2, 0.2, 0.9), size=6)
         self.view.addItem(self.ball_scatter)
 
-        # Stage 1 目标点 (target_pos) 3D 亮绿色高亮信标
         self.target_scatter = gl.GLScatterPlotItem()
         self.target_scatter.setData(pos=np.zeros((0, 3)), color=(0.1, 1.0, 0.4, 0.95), size=16)
         self.view.addItem(self.target_scatter)
@@ -271,12 +246,11 @@ class UIMixin:
 
         self.trail = sc.TrailRenderer(self.view, max_len=800)
         self.axes = sc.CarAxesRenderer(self.view)
-        # 初始速度方向与力度箭头（车：亮青色，最短 150 uu 与蓝轴等长；球：亮橙黄色，按球速伸缩）
         self.car_vel_arrow  = sc.VelocityArrowRenderer(self.view, color=(0.0, 1.0, 0.9, 0.95), width=4)
         self.ball_vel_arrow = sc.VelocityArrowRenderer(self.view, color=(1.0, 0.75, 0.1, 0.95), width=4)
+        self.focus_sector   = sc.FocusRegionRenderer(self.view)
         left.addWidget(self.view, stretch=1)
 
-        # 上下区域之间的 120Hz 动态车速进度条分隔线（含 1700 / 1800 / 2200 三条反色竖线）
         self.speed_bar = SpeedDividerBar()
         left.addWidget(self.speed_bar, stretch=0)
 
@@ -285,7 +259,6 @@ class UIMixin:
         self.plot = RewardPlotPanel(plot_widget)
         self.obs_panel = ObsPlotPanel(plot_widget)
 
-        # 右侧面板：固定横向宽度 (440px)，纵向可自由拉伸，彻底杜绝因文字长度变化导致的左右忽宽忽窄抖动
         self.right_panel = QtWidgets.QWidget()
         self.right_panel.setFixedWidth(self.RIGHT_PANEL_WIDTH)
         self.right_panel.setSizePolicy(
@@ -309,7 +282,6 @@ class UIMixin:
             "background:#000;padding:4px;border:2px solid #888;")
         right.addWidget(self.reset_indicator, stretch=0)
 
-        # 第 3 行状态栏：固定宽度 + 任意字符处自动断行 (WrapAnywhere) + 纵向自动拉伸
         self.status_label = WrapAnywhereLabel("IDLE")
         self.status_label.setStyleSheet(
             "color:#0fc;font-size:18px;font-weight:bold;"
@@ -349,7 +321,7 @@ class UIMixin:
             "F: FREERUN\n"
             "视图: O 切换 REWARD→OBS→FLAGS      1-8 obs 组(A-H)\n"
             "REWARD 模式: 1 r_total  2 r_cum  3 dist  4 分项  5 全部  6 spd/closing\n"
-            "P 切换 DELTA 模式     C 复制 HUD\n"
+            "P 切换 DELTA 模式 (支持 REWARD 与 OBS)     C 复制 HUD\n"
             "Enter 导出CSV(full)   Shift+Enter 导出CSV(compact)   Esc 退出"
         )
         self.help = WrapAnywhereLabel(help_txt)
@@ -359,8 +331,7 @@ class UIMixin:
 
     def _cfg_text(self):
         c = self.session.cfg
-        return (f"close={c.close_bonus} away={c.away_penalty} "
-                f"time={c.time_penalty} air={c.air_scale} "
-                f"touch={c.touch_bonus} | cl_th={c.closing_threshold} "
-                f"prog={c.closing_progress_scale} "
-                f"acc={c.closing_accum_scale}")
+        return (f"dist={c.distance_reward_scale} time=-{c.time_penalty_per_tick}/t "
+                f"boost=-{c.boost_penalty_per_unit}/u "
+                f"flip=-{c.flip_penalty_base}..-{c.flip_penalty_base + 18*c.flip_penalty_per_100_below} "
+                f"touch=+{c.touch_bonus:.0f} to=-{c.timeout_penalty:.0f}")

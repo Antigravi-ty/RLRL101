@@ -1,4 +1,3 @@
-"""视图切换 / 曲线模式 / 回放 seek / FREERUN / 状态文本刷新。"""
 import os
 import time as _time
 import numpy as np
@@ -25,8 +24,9 @@ class ViewsMixin:
         self.session.plot_mode = m
         if self.auto_session is not None:
             self.auto_session.plot_mode = m
-        self.mode_label.setText(f"曲线 {m}: {MODE_NAMES[m]}")
-        self.plot.update_mode(m, self._sess().frames)
+        tag = "Δ " if self.delta_mode else ""
+        self.mode_label.setText(f"曲线 {m}: {tag}{MODE_NAMES[m]}")
+        self.plot.update_mode(m, self._sess().frames, delta=self.delta_mode)
         self._save_prefs()
 
     def _cycle_view_mode(self):
@@ -72,7 +72,6 @@ class ViewsMixin:
         self._refresh_ui_state()
         self._save_prefs()
 
-    # ---------- FREERUN ----------
     def _toggle_freerun(self):
         sess = self._sess()
         if sess.state == STATE_FREERUN:
@@ -92,7 +91,6 @@ class ViewsMixin:
             self.obs_panel.clear()
             self._refresh_ui_state("FREERUN 中，F 结束并导出")
 
-    # ---------- 回放 / 重置 / 调速 / 复制 ----------
     def _seek(self, delta):
         sess = self._sess()
         sess.seek(delta)
@@ -121,10 +119,10 @@ class ViewsMixin:
         self.plot.clear()
         self._last_rendered_idx = None
         self.obs_panel.clear()
+        tag = "Δ " if self.delta_mode else ""
         if self.view_mode == "reward":
-            self.mode_label.setText(f"曲线 {cur_plot_mode}: {MODE_NAMES[cur_plot_mode]}")
+            self.mode_label.setText(f"曲线 {cur_plot_mode}: {tag}{MODE_NAMES[cur_plot_mode]}")
         elif self.view_mode == "obs":
-            tag = "Δ " if self.delta_mode else ""
             self.mode_label.setText(f"obs [{self.obs_group_idx+1}/{len(GROUP_ORDER)}] {tag}{GROUP_ORDER[self.obs_group_idx]}")
         else:
             self.mode_label.setText("flags 视图（0/1 方波，堆叠显示）")
@@ -151,7 +149,7 @@ class ViewsMixin:
             extra_short = extra
 
         if self.use_auto:
-            env_mode = getattr(self.env, "mode", "ground").upper()
+            env_mode = getattr(self.env, "mode", "all").upper()
             self.mode_indicator.setText(f"MODEL [{env_mode}]")
             self.mode_indicator.setStyleSheet(
                 "color:#f0f;font-size:16px;font-weight:bold;"

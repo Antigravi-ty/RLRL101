@@ -1,132 +1,26 @@
-import os, sys, csv, glob, argparse, time, random
+import os, sys, csv, argparse, time
 import numpy as np
-import torch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.env import BallReachEnv
+from core.env import BallReachEnv, EVAL_DIST_LABELS, EVAL_ANGLE_LABELS
 from core.constants import (
-    TICKS_PER_DECISION, MAX_DECISIONS_STAGE0,
+    TICKS_PER_DECISION, MAX_DECISIONS_STAGE0, EVAL_SAMPLES_PER_BIN,
 )
-from core.nn import multi_discrete_to_controls
-from core.obs_v3 import build_obs_v3
-from core.reward import RewardConfig, compute_step_reward
 from train.checkpoint import (
     load_ppo_model, ckpt_paths, discover_prefixes,
+    evaluate_16bin_grid, count_to_base36_char,
 )
 
 
-def eval_ground_batch(env, model, batch, max_decisions=MAX_DECISIONS_STAGE0):
-    dev = next(model.parameters()).device
-    cfg = RewardConfig(max_decisions=max_decisions)
-    touch_count = 0
-    touch_ticks_list = []
-    all_ticks_list = []
-    rcum_list = []
-    touch_rcum_list = []
-    touch_spd_list = []
-    jump_eps = 0
-    flip_eps = 0
-
-    max_ticks = max_decisions * TICKS_PER_DECISION
-
-    for sd in batch:
-        env.reset(spawn_state=sd)
-        obs_curr = env.last_obs_v3
-        prev_snap = env.snapshot()
-        ep_rcum = 0.0
-        ep_ticks = 0
-        touched_now = False
-        ep_jumped = False
-        ep_flipped = False
-        pre_touch_speed = prev_snap["car_speed"]
-
-        for step in range(1, max_decisions + 1):
-            if dev.type == "cpu" and hasattr(model, "act_step_fast"):
-                act_np, _, _ = model.act_step_fast(obs_curr, deterministic=True)
-            else:
-                with torch.no_grad():
-                    x_t = torch.tensor(obs_curr, dtype=torch.float32, device=dev)
-                    act_t, _, _, _ = model.get_action_and_value(x_t, deterministic=True)
-                    act_np = act_t.cpu().numpy()
-            if int(act_np[3]) == 1:
-                ep_jumped = True
-            ctrl = multi_discrete_to_controls(act_np)
-            ticks_run = 0
-            for _ in range(TICKS_PER_DECISION):
-                pre_touch_speed = env.step_tick(ctrl)
-                ticks_run += 1
-                if env._touched:
-                    break
-            ep_ticks += ticks_run
-            snap = env.snapshot()
-            if snap["is_flipping"]:
-                ep_flipped = True
-            touched_now = snap["touched"]
-            timeout_now = (step == max_decisions) and not touched_now
-
-            r, _ = compute_step_reward(
-                cfg,
-                prev_dist=prev_snap["dist"],
-                new_dist=snap["dist"],
-                car_speed=pre_touch_speed,
-                touched=touched_now,
-                timeout=timeout_now,
-                ticks_elapsed=ticks_run,
-            )
-            ep_rcum  += r
-            prev_snap = snap
-
-            if touched_now:
-                touch_count += 1
-                touch_ticks_list.append(ep_ticks)
-                touch_rcum_list.append(ep_rcum)
-                touch_spd_list.append(pre_touch_speed)
-                break
-
-            obs_curr, _, _ = build_obs_v3(
-                env.car, env.arena,
-                target_pos=env.target_pos,
-                target_time=env.target_time,
-            )
-
-        if ep_jumped:
-            jump_eps += 1
-        if ep_flipped:
-            flip_eps += 1
-        all_ticks_list.append(ep_ticks if touched_now else max_ticks)
-        rcum_list.append(ep_rcum)
-
-    n_tot = len(batch)
-    mean_touch_ticks = float(np.mean(touch_ticks_list)) if touch_ticks_list else float("inf")
-    mean_all_ticks = float(np.mean(all_ticks_list)) if all_ticks_list else float("inf")
-    return {
-        "touch_count": touch_count,
-        "n_total": n_tot,
-        "touch_rate": touch_count / max(1, n_tot),
-        "touch_ticks": mean_touch_ticks,
-        "touch_dec": mean_touch_ticks / float(TICKS_PER_DECISION),
-        "all_ticks": mean_all_ticks,
-        "all_dec": mean_all_ticks / float(TICKS_PER_DECISION),
-        "mean_rcum": float(np.mean(rcum_list)),
-        "touch_rcum": float(np.mean(touch_rcum_list)) if touch_rcum_list else 0.0,
-        "mean_touch_speed": float(np.mean(touch_spd_list)) if touch_spd_list else 0.0,
-        "jump_eps": jump_eps,
-        "flip_eps": flip_eps,
-        "per_ticks": all_ticks_list,
-    }
-
-
-def evaluate_model(ckpt_path, eval_seed=20261016, n_ground_batches=1, verbose=False):
+def evaluate_model(ckpt_path, eval_seed=20261016, samples_per_bin=EVAL_SAMPLES_PER_BIN, verbose=False):
     if not os.path.exists(ckpt_path):
         print(f"[cli_tuner] 错误: 找不到权重文件 {ckpt_path}")
         return None
 
-    env = BallReachEnv(mode="ground")
+    env = BallReachEnv(mode="all")
     model, ckpt = load_ppo_model(ckpt_path, device="cpu")
-    ckpt_mode = ckpt.get("mode", "ground")
-    if ckpt_mode == "stage0":
-        ckpt_mode = "ground"
+    ckpt_mode = ckpt.get("mode", "all")
 
     print("========================================================================================")
     print(f"  CLI Tuner [PPO]: 评估 {os.path.basename(ckpt_path)} (ckpt_mode={ckpt_mode})")
@@ -134,32 +28,41 @@ def evaluate_model(ckpt_path, eval_seed=20261016, n_ground_batches=1, verbose=Fa
     print("========================================================================================")
 
     t0 = time.time()
-    rng = random.Random(eval_seed)
-    batch = []
-    for _ in range(max(1, n_ground_batches)):
-        batch.extend(env.generate_stratified_stage0_batch(rng=rng))
-    g_res = eval_ground_batch(env, model, batch)
-    print(f"\n[Ground 分层随机基准 ({len(batch)} 场景, seed={eval_seed})]")
-    print(f"  触球率 (Touch Rate)         : {g_res['touch_count']}/{g_res['n_total']} ({g_res['touch_rate']:.1%})")
-    print(f"  命中平均帧数 (Touch Frames) : {g_res['touch_ticks']:.1f} 帧 ({g_res['touch_dec']:.2f} 步)")
-    print(f"  全样本含罚帧数 (All Frames) : {g_res['all_ticks']:.1f} 帧 ({g_res['all_dec']:.2f} 步, 漏球按 {MAX_DECISIONS_STAGE0*4}f 计)")
-    print(f"  触球前平均车速 (Touch Speed): {g_res['mean_touch_speed']:.1f} uu/s")
-    print(f"  触发跳跃/翻滚局数 (Jump/Flip): Jump={g_res['jump_eps']}/{g_res['n_total']} | Flip={g_res['flip_eps']}/{g_res['n_total']}")
-    print(f"  平均总分 (Mean r_cum)       : {g_res['mean_rcum']:+.2f} (命中均分: {g_res['touch_rcum']:+.2f})")
+    res = evaluate_16bin_grid(
+        env, model,
+        max_decisions=MAX_DECISIONS_STAGE0,
+        samples_per_bin=samples_per_bin,
+        seed=eval_seed,
+    )
+    print(f"\n[16-Bin 分位评测 ({res['n_total']} 场景 = 16x{samples_per_bin}, 满分='zzzzzzzzzzzzzzzz', seed={eval_seed})]")
+    print(f"  16-Bin 编码 (0-9a-z)        : [{res['grid_str']}]  (各格命中: {res['bin_touches']})")
+    print(f"  总触球率 (Touch Rate)       : {res['touch_count']}/{res['n_total']} ({res['touch_rate']:.1%})")
+    print(f"  命中平均用时 (Touch Time)   : {res['touch_sec']:.2f}s ({res['touch_ticks']:.1f}f / {res['touch_dec']:.2f}步)")
+    print(f"  全样本含罚用时 (All Time)   : {res['all_sec']:.2f}s ({res['all_ticks']:.1f}f, 漏球按 {MAX_DECISIONS_STAGE0*4}f 计)")
+    print(f"  触发跳跃/翻滚局数 (Jump/Flip): Jump={res['jump_eps']}/{res['n_total']} | Flip={res['flip_eps']}/{res['n_total']}")
+    print(f"  平均总分 (Mean r_cum)       : {res['mean_rcum']:+.2f}")
+
+    print("\n  [4 距离段 x 4 方位角 (F/R/L/B) 矩阵明细]:")
+    header_angles = "  ".join(f"{a:>8}" for a in EVAL_ANGLE_LABELS)
+    print(f"  {'Dist \\ Angle':<12}  {header_angles}")
+    for d_idx, d_lab in enumerate(EVAL_DIST_LABELS):
+        cells = []
+        for a_idx in range(4):
+            b_idx = d_idx * 4 + a_idx
+            cnt = res["bin_touches"][b_idx]
+            ch = count_to_base36_char(cnt)
+            cells.append(f"{ch}({cnt:>2}/{samples_per_bin})")
+        print(f"  {d_lab:<12}  " + "  ".join(f"{c:>8}" for c in cells))
 
     dt = time.time() - t0
-    print(f"elapsed = {dt:.2f}s")
-    return {"ground": g_res}
+    print(f"\nelapsed = {dt:.2f}s")
+    return res
 
 
-def benchmark_all_prefixes(prefixes=None, from_tag="best", eval_seed=20261016, n_ground_batches=1):
+def benchmark_all_prefixes(prefixes=None, from_tag="best", eval_seed=20261016, samples_per_bin=EVAL_SAMPLES_PER_BIN):
     if not prefixes:
         prefixes = discover_prefixes()
-    env = BallReachEnv(mode="ground")
-    rng = random.Random(eval_seed)
-    batch = []
-    for _ in range(max(1, n_ground_batches)):
-        batch.extend(env.generate_stratified_stage0_batch(rng=rng))
+    env = BallReachEnv(mode="all")
 
     rows = []
     for p in prefixes:
@@ -170,40 +73,45 @@ def benchmark_all_prefixes(prefixes=None, from_tag="best", eval_seed=20261016, n
         if not os.path.exists(path):
             continue
         model, ckpt = load_ppo_model(path, device="cpu")
-        g_res = eval_ground_batch(env, model, batch)
+        res = evaluate_16bin_grid(
+            env, model,
+            max_decisions=MAX_DECISIONS_STAGE0,
+            samples_per_bin=samples_per_bin,
+            seed=eval_seed,
+        )
         rows.append({
             "prefix": p,
             "path": os.path.basename(path),
             "ep": ckpt.get("episode", "?"),
-            "g_tc": g_res["touch_count"],
-            "g_tot": g_res["n_total"],
-            "g_tr": g_res["touch_rate"],
-            "g_touch_f": g_res["touch_ticks"],
-            "g_touch_dec": g_res["touch_dec"],
-            "g_all_f": g_res["all_ticks"],
-            "g_all_dec": g_res["all_dec"],
-            "g_spd": g_res["mean_touch_speed"],
-            "g_flip": g_res["flip_eps"],
-            "g_rcum": g_res["mean_rcum"],
+            "grid_str": res["grid_str"],
+            "tc": res["touch_count"],
+            "tot": res["n_total"],
+            "tr": res["touch_rate"],
+            "touch_sec": res["touch_sec"],
+            "touch_f": res["touch_ticks"],
+            "all_sec": res["all_sec"],
+            "all_f": res["all_ticks"],
+            "flip": res["flip_eps"],
+            "rcum": res["mean_rcum"],
         })
 
     if not rows:
         print("[cli_tuner] ./checkpoints/ 下未找到任何模型权重文件。")
         return []
 
+    n_tot = 16 * samples_per_bin
     print("========================================================================================================================")
-    print(f"  PPO 策略全场随机地面球基准排行榜 (Ground {len(batch)} 场景分层同题对决, seed={eval_seed})")
+    print(f"  PPO 策略 16-Bin 基准排行榜 ({n_tot} 场景 = 16x{samples_per_bin}, 完美编码='zzzzzzzzzzzzzzzz', seed={eval_seed})")
     print("========================================================================================================================")
-    rows_g = sorted(rows, key=lambda r: (r["g_all_f"], -r["g_tc"]))
-    print(f"{'排序':<4} {'策略名称 (Prefix)':<20} {'触球率':<12} {'全样本均帧(含罚▼)':<18} {'命中均帧(步数)':<18} {'触球前车速':<14} {'翻滚局数':<10} {'平均总分(r_cum)'}")
+    rows_sorted = sorted(rows, key=lambda r: (r["all_f"], -r["tc"]))
+    print(f"{'排序':<4} {'策略名称 (Prefix)':<18} {'16-Bin (0-9a-z)':<18} {'触球率':<13} {'全样本均时(▼)':<16} {'命中均时':<16} {'翻滚局数':<10} {'平均总分'}")
     print("-" * 120)
-    for idx, r in enumerate(rows_g, 1):
-        tc_str = f"{r['g_tc']}/{r['g_tot']}({r['g_tr']:.0%})"
-        all_str = f"{r['g_all_f']:.1f}f ({r['g_all_dec']:.2f}s)"
-        tch_str = f"{r['g_touch_f']:.1f}f ({r['g_touch_dec']:.2f}s)"
-        spd_str = f"{r['g_spd']:.0f} uu/s"
-        fl_str = f"{r['g_flip']}/{r['g_tot']}"
-        print(f"{idx:<6} {r['prefix']:<20} {tc_str:<13} {all_str:<20} {tch_str:<20} {spd_str:<15} {fl_str:<11} {r['g_rcum']:+.2f}")
+    for idx, r in enumerate(rows_sorted, 1):
+        tc_str = f"{r['tc']}/{r['tot']}({r['tr']:.0%})"
+        all_str = f"{r['all_sec']:.2f}s ({r['all_f']:.0f}f)"
+        tch_str = f"{r['touch_sec']:.2f}s ({r['touch_f']:.0f}f)"
+        fl_str = f"{r['flip']}/{r['tot']}"
+        print(f"{idx:<6} {r['prefix']:<18} [{r['grid_str']}] {tc_str:<13} {all_str:<18} {tch_str:<16} {fl_str:<11} {r['rcum']:+.2f}")
     print("========================================================================================================================")
     return rows
 
@@ -268,7 +176,7 @@ def verify_and_compare_csv(csv_path, ckpt_path=None):
 
 
 def main():
-    p = argparse.ArgumentParser(description="CLI multi-checkpoint Ground benchmark evaluator & CSV diagnostics")
+    p = argparse.ArgumentParser(description="CLI multi-checkpoint 16-bin evaluator & CSV diagnostics")
     p.add_argument("--prefix", type=str, nargs="*", default=None,
                    help="1 个或多个模型 prefix (不传则自动评测 ./checkpoints/ 下全部模型并输出排行榜)")
     p.add_argument("--ckpt", type=str, default=None,
@@ -276,10 +184,10 @@ def main():
     p.add_argument("--from", dest="from_ckpt", default="best",
                    choices=["latest", "best"],
                    help="用 prefix 时读哪个权重 (default: best)")
-    p.add_argument("--batches", type=int, default=1,
-                   help="Ground 分层评估批次倍数 (每批 24 场景, default: 1 -> 24 场景)")
+    p.add_argument("--samples", type=int, default=EVAL_SAMPLES_PER_BIN,
+                   help=f"每个分位格样本数 (default: {EVAL_SAMPLES_PER_BIN} -> 16x{EVAL_SAMPLES_PER_BIN}={16*EVAL_SAMPLES_PER_BIN} 场景)")
     p.add_argument("--seed", type=int, default=20261016,
-                   help="Ground 评估随机种子 (default: 20261016)")
+                   help="评估随机种子 (default: 20261016)")
     p.add_argument("--verify", type=str, nargs="+", default=None,
                    help="校验并诊断指定的 1 个或多个 CSV 轨迹文件")
     p.add_argument("--verbose", action="store_true")
@@ -297,7 +205,7 @@ def main():
                 prefixes=prefixes,
                 from_tag=args.from_ckpt,
                 eval_seed=args.seed,
-                n_ground_batches=args.batches,
+                samples_per_bin=args.samples,
             )
             return
 
@@ -314,7 +222,7 @@ def main():
     evaluate_model(
         ckpt_path,
         eval_seed=args.seed,
-        n_ground_batches=args.batches,
+        samples_per_bin=args.samples,
         verbose=args.verbose,
     )
 

@@ -32,7 +32,7 @@ class AutoSession(Session):
 
     def reload(self):
         self.model, self.ckpt_meta = load_ppo_model(self.ckpt_path, device="cpu")
-        ckpt_mode = self.ckpt_meta.get("mode", "ground")
+        ckpt_mode = self.ckpt_meta.get("mode", "all")
         if ckpt_mode == "stage0":
             ckpt_mode = "ground"
         self.env.mode = ckpt_mode
@@ -58,7 +58,7 @@ class AutoSession(Session):
             self.current_ppo_ctrl = multi_discrete_to_controls(self.current_ppo_action)
             self._ppo_ticks_left = TICKS_PER_DECISION
 
-        pre_step_speed = self.env.step_tick(self.current_ppo_ctrl)
+        boost_used, flip_triggered, flip_trigger_speed = self.env.step_tick(self.current_ppo_ctrl)
         self._ppo_ticks_left -= 1
         input_dict = self._ppo_action_to_input_dict(self.current_ppo_action, self.current_ppo_ctrl)
 
@@ -96,6 +96,8 @@ class AutoSession(Session):
             detail = {
                 "r_dist": 0.0,
                 "r_time": 0.0,
+                "r_boost": 0.0,
+                "r_flip": 0.0,
                 "r_touch": 0.0,
                 "r_timeout": 0.0,
                 "r_total": 0.0,
@@ -109,10 +111,12 @@ class AutoSession(Session):
                 self.cfg,
                 prev_dist=prev["dist"],
                 new_dist=snap["dist"],
-                car_speed=pre_step_speed,
                 touched=touched,
                 timeout=timeout,
                 ticks_elapsed=1,
+                boost_used=boost_used,
+                flip_triggered=flip_triggered,
+                flip_trigger_speed=flip_trigger_speed,
             )
             self.r_cum += r_total
 

@@ -42,7 +42,7 @@ def export_frames(frames, out_dir="data", mode="full"):
             "ch0_ws", "ch1_ad", "ch2_qe", "ch3_jump", "ch4_boost", "ch5_slide", "keys_str",
             "on_ground", "is_flipping", "is_supersonic", "air_time", "car_boost",
             "dist", "dist_h", "align", "closing", "car_speed",
-            "r_total", "r_cum", "r_dist", "r_time", "r_touch", "r_timeout",
+            "r_total", "r_cum", "r_dist", "r_time", "r_boost", "r_flip", "r_touch", "r_timeout",
             "b_fwd", "b_right", "b_up", "|d|",
             "bv_fwd", "bv_right", "bv_up", "|bv|",
             "v_fwd", "v_right", "v_up", "|v|",
@@ -60,7 +60,7 @@ def export_frames(frames, out_dir="data", mode="full"):
             "up_z", "on_ground", "is_flipping", "is_supersonic", "air_time", "car_boost",
             "dist", "dist_h", "align", "closing", "car_speed",
             "r_total", "r_cum",
-            "r_dist", "r_time", "r_touch", "r_timeout",
+            "r_dist", "r_time", "r_boost", "r_flip", "r_touch", "r_timeout",
             "obs_a_nx", "obs_a_px", "obs_a_ny", "obs_a_py",
             "obs_a_floor", "obs_a_ceil",
             "obs_b_pitch", "obs_b_yaw", "obs_b_roll",
@@ -98,7 +98,7 @@ def export_frames(frames, out_dir="data", mode="full"):
             sp_vals = [
                 fr.get("source", "session"),
                 sp.get("spawn_id", "0000"),
-                sp.get("mode", "ground"),
+                sp.get("mode", "all"),
                 *(sp.get("car_pos") or (0.0, 0.0, 0.0)),
                 *(sp.get("car_vel") or (0.0, 0.0, 0.0)),
                 *(sp.get("car_ang") or (0.0, 0.0, 0.0)),
@@ -124,6 +124,7 @@ def export_frames(frames, out_dir="data", mode="full"):
                     fr.get("closing", 0.0), fr.get("car_speed", 0.0),
                     fr["r_total"], fr["r_cum"],
                     d.get("r_dist",0), d.get("r_time",0),
+                    d.get("r_boost",0), d.get("r_flip",0),
                     d.get("r_touch",0), d.get("r_timeout",0),
                     _gv(parts,"D.ball_rel_b",0), _gv(parts,"D.ball_rel_b",1),
                     _gv(parts,"D.ball_rel_b",2), _gv(parts,"D.ball_rel_b",3),
@@ -153,6 +154,7 @@ def export_frames(frames, out_dir="data", mode="full"):
                     fr.get("closing", 0.0), fr.get("car_speed", 0.0),
                     fr["r_total"], fr["r_cum"],
                     d.get("r_dist",0), d.get("r_time",0),
+                    d.get("r_boost",0), d.get("r_flip",0),
                     d.get("r_touch",0), d.get("r_timeout",0),
                     _gv(parts,"A.face_dists",0), _gv(parts,"A.face_dists",1),
                     _gv(parts,"A.face_dists",2), _gv(parts,"A.face_dists",3),
@@ -195,7 +197,7 @@ def parse_spawn_state_from_row(row):
     if "init_cx" not in row or not row.get("init_cx"):
         return None
     return {
-        "mode": row.get("spawn_mode", "ground"),
+        "mode": row.get("spawn_mode", "all"),
         "car_pos": (float(row["init_cx"]), float(row["init_cy"]), float(row["init_cz"])),
         "car_vel": (float(row["init_cvx"]), float(row["init_cvy"]), float(row["init_cvz"])),
         "car_ang": (float(row["init_cax"]), float(row["init_cay"]), float(row["init_caz"])),

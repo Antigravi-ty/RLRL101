@@ -67,11 +67,11 @@ class RewardTuner(UIMixin, KeysMixin, ViewsMixin, RenderMixin, AutoMixin,
         self._last_rendered_idx = None
         self._timer_ms = TICK_MS_IDLE
 
-        self.setWindowTitle("Reward Tuner v5 (Pure PPO)")
+        self.setWindowTitle("Reward Tuner v6 (Pure PPO + Focus Region + Delta)")
         self.resize(1600, 900)
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
 
-        self.env = BallReachEnv()
+        self.env = BallReachEnv(mode="all")
         self.session = Session(self.env, RewardConfig())
         self.session.plot_mode = self.plot_mode
         self.keys = {k: False for k in KEY_NAMES}
@@ -98,6 +98,13 @@ class RewardTuner(UIMixin, KeysMixin, ViewsMixin, RenderMixin, AutoMixin,
         return self.session
 
     def tick(self):
+        if self.env.maybe_reload_focus_config():
+            fc = self.env.focus_cfg
+            tag = (f"Focus ON ({fc.prob:.0%} d=[{fc.dist_min:.0f},{fc.dist_max:.0f}] "
+                   f"ang=[{fc.angle_deg_min:.0f},{fc.angle_deg_max:.0f}])"
+                   if fc.enabled else "Focus OFF")
+            self._refresh_ui_state(tag)
+
         sess = self._sess()
         if sess is None:
             return
@@ -114,7 +121,7 @@ class RewardTuner(UIMixin, KeysMixin, ViewsMixin, RenderMixin, AutoMixin,
             if (now - self._last_plot_t) >= PLOT_REFRESH_S:
                 self._last_plot_t = now
                 if self.view_mode == "reward":
-                    self.plot.update_mode(sess.plot_mode, sess.frames)
+                    self.plot.update_mode(sess.plot_mode, sess.frames, delta=self.delta_mode)
                 elif self.view_mode == "obs":
                     self.obs_panel.update_group(
                         GROUP_ORDER[self.obs_group_idx], sess.frames,

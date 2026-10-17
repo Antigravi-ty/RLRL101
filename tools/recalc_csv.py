@@ -21,10 +21,14 @@ def recalc_file(path, cfg=None):
     init_dist = float(rows[0]["dist"])
     prev_dist = init_dist
     prev_spd = math.hypot(float(rows[0]["vx"]), float(rows[0]["vy"]), float(rows[0]["vz"]))
+    prev_boost = float(rows[0].get("car_boost", 33.3))
+    prev_flipping = bool(int(float(rows[0].get("is_flipping", 0))))
 
     totals = {
         "r_dist": 0.0,
         "r_time": 0.0,
+        "r_boost": 0.0,
+        "r_flip": 0.0,
         "r_touch": 0.0,
         "r_timeout": 0.0,
         "r_total": 0.0,
@@ -36,6 +40,10 @@ def recalc_file(path, cfg=None):
             continue
         dist = float(row["dist"])
         spd = math.hypot(float(row["vx"]), float(row["vy"]), float(row["vz"]))
+        cur_boost = float(row.get("car_boost", prev_boost))
+        boost_used = max(0.0, prev_boost - cur_boost)
+        now_flipping = bool(int(float(row.get("is_flipping", 0))))
+        flip_triggered = (not prev_flipping) and now_flipping
         touched = float(row.get("r_touch", 0.0)) > 0.0
         timeout = (float(row.get("r_timeout", 0.0)) < 0.0) or (idx == n_rows - 1 and not touched and n_rows >= cfg.max_decisions * 4)
 
@@ -43,15 +51,19 @@ def recalc_file(path, cfg=None):
             cfg,
             prev_dist=prev_dist,
             new_dist=dist,
-            car_speed=prev_spd,
             touched=touched,
             timeout=timeout,
             ticks_elapsed=1,
+            boost_used=boost_used,
+            flip_triggered=flip_triggered,
+            flip_trigger_speed=prev_spd,
         )
         prev_dist = dist
         prev_spd = spd
+        prev_boost = cur_boost
+        prev_flipping = now_flipping
 
-        for k in ("r_dist", "r_time", "r_touch", "r_timeout", "r_total"):
+        for k in ("r_dist", "r_time", "r_boost", "r_flip", "r_touch", "r_timeout", "r_total"):
             totals[k] += d[k]
 
     return {
@@ -72,8 +84,8 @@ def main():
         files.extend(expanded if expanded else [a])
 
     cfg = RewardConfig(max_decisions=180)
-    print(f"{'File':<28} | {'Frames':>6} | {'Old r_cum':>9} | {'New r_cum':>9} | {'r_dist':>7} | {'r_time':>7} | {'r_touch':>7} | {'r_timeout':>9}")
-    print("-" * 102)
+    print(f"{'File':<28} | {'Frames':>6} | {'Old r_cum':>9} | {'New r_cum':>9} | {'r_dist':>7} | {'r_time':>7} | {'r_boost':>7} | {'r_flip':>8} | {'r_touch':>7} | {'r_timeout':>9}")
+    print("-" * 122)
     for f in files:
         if not os.path.isfile(f):
             continue
@@ -82,7 +94,8 @@ def main():
             continue
         print(
             f"{res['file']:<28} | {res['frames']:>6d} | {res['old_rcum']:>+9.2f} | {res['r_total']:>+9.2f} | "
-            f"{res['r_dist']:>+7.2f} | {res['r_time']:>+7.2f} | {res['r_touch']:>+7.2f} | {res['r_timeout']:>+9.2f}"
+            f"{res['r_dist']:>+7.2f} | {res['r_time']:>+7.2f} | {res['r_boost']:>+7.2f} | {res['r_flip']:>+8.4f} | "
+            f"{res['r_touch']:>+7.2f} | {res['r_timeout']:>+9.2f}"
         )
 
 

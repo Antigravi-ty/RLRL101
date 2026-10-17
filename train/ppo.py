@@ -1,17 +1,11 @@
-"""PPO 组件：RolloutBuffer (支持 GAE 广义优势估计) 与 单步更新器。
-纯 PyTorch + NumPy 极简实现（CleanRL 风格），完全透明，支持 CPU / Apple Silicon MPS / CUDA。
-"""
 import numpy as np
 import torch
 import torch.nn as nn
 
 
 def get_device(prefer_mps=True):
-    """自动选择最优计算设备：M1/M2/M3 Mac 自动启用 MPS 或 CPU，Linux/Win 自动选 CUDA 或 CPU。"""
     if torch.cuda.is_available():
         return torch.device("cuda")
-    # 对于小型 MLP (256 维)，在部分步进频繁的 RL 场景中 CPU 甚至比 MPS 跨设备拷贝更快；
-    # 这里提供环境变量 USE_MPS=1 显式开启 MPS，默认在 M1 CPU 上也能跑到 2000+ FPS。
     import os
     if prefer_mps and os.environ.get("USE_MPS", "0") == "1":
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -20,8 +14,6 @@ def get_device(prefer_mps=True):
 
 
 class RolloutBuffer:
-    """PPO 在线轨迹缓冲区，支持多离散动作空间 (n_steps, 6) 与 GAE 计算。"""
-
     def __init__(self, n_steps, obs_dim, action_channels=6):
         self.n_steps = int(n_steps)
         self.obs_dim = int(obs_dim)
@@ -53,11 +45,7 @@ class RolloutBuffer:
     def is_full(self):
         return self.ptr >= self.n_steps
 
-    def compute_returns_and_advantages(self, last_value, gamma=0.995, gae_lambda=0.95, reward_scale=0.05):
-        """计算广义优势估计 (GAE)。
-        注意：原始 step 奖励在触球瞬间高达 +100~500，通过 reward_scale (默认 0.05) 缩放，
-        能显著稳定 Critic 价值网络的回归梯度，同时完全不改变原始日志与 CSV 展示的分数！
-        """
+    def compute_returns_and_advantages(self, last_value, gamma=0.997, gae_lambda=0.95, reward_scale=0.05):
         last_gae_lam = 0.0
         n = self.ptr
         scaled_rewards = self.rewards[:n] * reward_scale
@@ -75,14 +63,12 @@ class RolloutBuffer:
 
 
 def _channel_kl_loss(student_logits, teacher_logits_detached, slices):
-    """按 6 个独立动作通道计算 KL(teacher || student)，梯度仅流向 student_logits。"""
     import torch.nn.functional as F
     kl_sum = 0.0
     for (s, e) in slices:
         log_p_student = F.log_softmax(student_logits[:, s:e], dim=-1)
         log_p_teacher = F.log_softmax(teacher_logits_detached[:, s:e], dim=-1)
         p_teacher = log_p_teacher.exp()
-        # KL(P_teacher || P_student) = sum P_teacher * (log P_teacher - log P_student)
         kl_ch = (p_teacher * (log_p_teacher - log_p_student)).sum(dim=-1)
         kl_sum = kl_sum + kl_ch
     return kl_sum
@@ -103,9 +89,6 @@ def ppo_update(
     vf_only=False,
     device=torch.device("cpu"),
 ):
-    """执行一次完整的 PPO 多 Epoch 小批量更新，内置【价值引导左右镜像对称蒸馏】。
-    当 vf_only=True 时（用于加载跨版本权重后的前几步 Critic 预热校准），仅更新 Critic 价值网络而不改动 Actor。
-    """
     from core.obs_v3 import mirror_obs_v3_torch, mirror_logits_torch
 
     n = buffer.ptr
@@ -150,7 +133,7 @@ def ppo_update(
 
             _, newlogprob, entropy, newvalue = model.get_action_and_value(mb_obs, mb_act)
             logratio = newlogprob - b_logprobs[mb_inds]
-            ratio = logratio.exp()
+            ratio = logratio.exp().clamp(max=10.0)
 
             with torch.no_grad():
                 approx_kl = ((ratio - 1.0) - logratio).mean().item()
@@ -162,21 +145,18 @@ def ppo_update(
             else:
                 mb_advantages = mb_adv_raw
 
-            # Policy loss (Clipped Surrogate Objective)
             pg_loss1 = -mb_advantages * ratio
             pg_loss2 = -mb_advantages * torch.clamp(ratio, 1.0 - clip_coef, 1.0 + clip_coef)
             pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
-            # Value loss
             v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
 
-            # ---- 价值引导左右镜像对称蒸馏 ----
             sym_loss = torch.tensor(0.0, device=device)
             if augment_symmetry and sym_coef > 0.0:
                 mb_obs_m = b_obs_m[mb_inds]
 
-                logits_orig = model.apply_action_mask(model.actor(mb_obs), mb_obs, ch4_action=mb_act[:, 4])
-                logits_mirr = model.apply_action_mask(model.actor(mb_obs_m), mb_obs_m, ch4_action=mb_act[:, 4])
+                logits_orig = model.apply_action_mask(model.actor(mb_obs), mb_obs)
+                logits_mirr = model.apply_action_mask(model.actor(mb_obs_m), mb_obs_m)
                 v_orig = newvalue
                 v_mirr = model.get_value(mb_obs_m)
 
@@ -202,7 +182,6 @@ def ppo_update(
                 sym_loss = sym_kl + 0.25 * v_sym
                 sym_losses.append(sym_loss.item())
 
-            # Entropy bonus
             entropy_loss = entropy.mean()
             loss = pg_loss - ent_coef * entropy_loss + vf_coef * v_loss + sym_coef * sym_loss
 
@@ -215,7 +194,6 @@ def ppo_update(
             v_losses.append(v_loss.item())
             ent_losses.append(entropy_loss.item())
 
-    # Explained variance (诊断 Critic 是否真正理解局面价值)
     y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
     var_y = np.var(y_true)
     explained_var = np.nan if var_y == 0 else float(1.0 - np.var(y_true - y_pred) / (var_y + 1e-8))

@@ -41,10 +41,20 @@ def _fmt_flags(fr):
     return f"---- flags ----\n{line1}\n{line2}\n{line3}\n"
 
 
+def _fmt_focus(session):
+    fc = getattr(session.env, "focus_cfg", None)
+    if fc is None or not fc.enabled:
+        return ""
+    return (f"[Focus Region ON: prob={fc.prob:.0%} "
+            f"d=[{fc.dist_min:.0f},{fc.dist_max:.0f}] "
+            f"ang=[{fc.angle_deg_min:.0f},{fc.angle_deg_max:.0f}]deg]\n")
+
+
 def format_hud(session, current_boost, obs_group=None):
     boost_line = f"BOOST: {current_boost:5.1f}"
     frames = session.frames
     is_auto = _is_auto(session)
+    focus_str = _fmt_focus(session)
 
     if session.state in (STATE_PLAYBACK, STATE_DONE) and frames:
         fr = frames[session.playback_idx]
@@ -57,6 +67,7 @@ def format_hud(session, current_boost, obs_group=None):
         keys_str = fr["input"].get("keys_str", "")
         ch_list  = fr["input"].get("ppo_channels", [])
         body = (
+            f"{focus_str}"
             f"{'AUTO' if is_auto else 'PLAYBACK'}  "
             f"i={fr['i']}/{len(frames)-1}  "
             f"速度 {int(session.speed*100)}%\n"
@@ -80,6 +91,8 @@ def format_hud(session, current_boost, obs_group=None):
             f"---- reward ----\n"
             f"r_dist     = {d.get('r_dist', 0):+8.3f}\n"
             f"r_time     = {d.get('r_time', 0):+8.3f}\n"
+            f"r_boost    = {d.get('r_boost', 0):+8.4f}\n"
+            f"r_flip     = {d.get('r_flip', 0):+8.4f}\n"
             f"r_touch    = {d.get('r_touch', 0):+8.3f}\n"
             f"r_timeout  = {d.get('r_timeout', 0):+8.3f}\n"
             f"r_total    = {fr['r_total']:+8.3f}\n"
@@ -98,6 +111,7 @@ def format_hud(session, current_boost, obs_group=None):
         car_spd = fr.get("car_speed", 0.0)
         keys_str = fr["input"].get("keys_str", "")
         body = (
+            f"{focus_str}"
             f"{'AUTO' if is_auto else 'RECORDING'}  "
             f"i={fr['i']}/{RECORD_LIMIT}  r_cum={fr['r_cum']:+.3f}\n"
             f"keys: [{keys_str}]\n"
@@ -111,7 +125,7 @@ def format_hud(session, current_boost, obs_group=None):
             body += _model_block(session, fr)
         return boost_line, body
 
-    return boost_line, "按任一操作键开始录制  (M: 切换 MODEL/HUMAN)  (F: FREERUN)"
+    return boost_line, f"{focus_str}按任一操作键开始录制  (M: 切换 MODEL/HUMAN)  (F: FREERUN)"
 
 
 def _model_block(session, fr=None):
@@ -128,7 +142,7 @@ def _model_block(session, fr=None):
     p_hb = probs[5][1]
     return (
         f"\n---- PPO Multi-Discrete (V={val:+.2f}) ----\n"
-        f"act={list(act)}  mode={getattr(session.env, 'mode', 'ground')}\n"
+        f"act={list(act)}  mode={getattr(session.env, 'mode', 'all')}\n"
         f"W/0/S: W={p_ws[2]:.0%} 0={p_ws[1]:.0%} S={p_ws[0]:.0%}\n"
         f"A/0/D: A={p_ad[0]:.0%} 0={p_ad[1]:.0%} D={p_ad[2]:.0%}\n"
         f"Q/0/E: Q={p_qe[0]:.0%} 0={p_qe[1]:.0%} E={p_qe[2]:.0%}\n"

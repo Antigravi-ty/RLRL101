@@ -1,4 +1,3 @@
-"""3D 场景渲染 + HUD 刷新。"""
 from core.obs_v2 import GROUP_ORDER
 from vis import scene as sc
 from .ui_constants import STATE_PLAYBACK, STATE_DONE
@@ -49,7 +48,6 @@ class RenderMixin:
                 import numpy as np
                 self.target_scatter.setData(pos=np.zeros((0, 3)))
 
-        # ★ 初始速度箭头：仅在收到任何输入之前 (STATE_IDLE 且 frames 为空) 显示，一旦开始输入立即消失！
         show_init_arrows = (len(sess.frames) == 0)
         if hasattr(self, "car_vel_arrow"):
             self.car_vel_arrow.update(
@@ -60,6 +58,12 @@ class RenderMixin:
             self.ball_vel_arrow.update(
                 ball_r, sc.r2r(snap["ball_vel"]), fallback_dir_r=None,
                 min_len=93.0, max_len=1250.0, scale=1.5, show=show_init_arrows,
+            )
+        if hasattr(self, "focus_sector"):
+            self.focus_sector.update(
+                car_pos, snap["fwd"], snap["right"],
+                getattr(self.env, "focus_cfg", None),
+                show=show_init_arrows,
             )
 
         if hasattr(self, "speed_bar"):
@@ -101,7 +105,6 @@ class RenderMixin:
         fwd_r = sc.vec_r2r_tuple(fr["fwd"])
         up_r  = sc.vec_r2r_tuple(fr["up"])
         rgt_r = sc.vec_r2r_tuple(fr["right"])
-        # 回放第 0 帧时同样显示初始速度箭头，第 1 帧起立即隐藏
         show_init_arrows = (sess.playback_idx == 0)
         if hasattr(self, "car_vel_arrow"):
             self.car_vel_arrow.update(
@@ -112,6 +115,12 @@ class RenderMixin:
             self.ball_vel_arrow.update(
                 ball_r, sc.r2r(fr.get("ball_vel", (0, 0, 0))), fallback_dir_r=None,
                 min_len=93.0, max_len=1250.0, scale=1.5, show=show_init_arrows,
+            )
+        if hasattr(self, "focus_sector"):
+            self.focus_sector.update(
+                fr["car_pos"], fr["fwd"], fr["right"],
+                getattr(self.env, "focus_cfg", None),
+                show=show_init_arrows,
             )
 
         if hasattr(self, "speed_bar"):

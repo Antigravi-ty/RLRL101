@@ -76,7 +76,7 @@ class Session:
 
     def _step_once(self, keys):
         ctrl = build_car_controls(keys)
-        pre_step_speed = self.env.step_tick(ctrl)
+        boost_used, flip_triggered, flip_trigger_speed = self.env.step_tick(ctrl)
         snap = self.env.snapshot()
 
         obs_v2, obs_parts = build_obs_v2(
@@ -108,6 +108,8 @@ class Session:
             detail = {
                 "r_dist": 0.0,
                 "r_time": 0.0,
+                "r_boost": 0.0,
+                "r_flip": 0.0,
                 "r_touch": 0.0,
                 "r_timeout": 0.0,
                 "r_total": 0.0,
@@ -121,10 +123,12 @@ class Session:
                 self.cfg,
                 prev_dist=prev["dist"],
                 new_dist=snap["dist"],
-                car_speed=pre_step_speed,
                 touched=touched,
                 timeout=timeout,
                 ticks_elapsed=1,
+                boost_used=boost_used,
+                flip_triggered=flip_triggered,
+                flip_trigger_speed=flip_trigger_speed,
             )
             self.r_cum += r_total
 

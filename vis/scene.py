@@ -1,26 +1,19 @@
-"""
-所有可视化工具共用的场景构建。
-- 坐标转换
-- 地板/边界/球门
-- Boost pads
-- 轨迹（带 boost 高亮）
-- 车头三轴指示器
-"""
+import math
 import numpy as np
 import pyqtgraph.opengl as gl
 
 
 def r2r(p):
-    """RocketSim (x,y,z) → render (-x,y,z)"""
     return np.array([-p[0], p[1], p[2]], dtype=np.float32)
 
 
 def vec_r2r(v):
     return np.array([-v.x, v.y, v.z], dtype=np.float32)
 
+
 def vec_r2r_tuple(t):
-    """(x,y,z) 元组 → render 坐标"""
     return np.array([-t[0], t[1], t[2]], dtype=np.float32)
+
 
 def add_floor(view, size=(8000, 10240), spacing=(500, 500)):
     grid = gl.GLGridItem()
@@ -60,7 +53,6 @@ def add_goals(view, y=5120, w=1786.0, h=642.0):
 
 
 def add_pads(view, arena):
-    """返回 (big_scatter, small_scatter, big_idx, small_idx, pad_refs)"""
     pads = arena.get_boost_pads()
     big_xyz, small_xyz = [], []
     big_idx, small_idx = [], []
@@ -102,11 +94,10 @@ def update_pad_colors(big, small, big_idx, small_idx, pads):
 
 
 class TrailRenderer:
-    """带 boost 金色高亮的轨迹。"""
     def __init__(self, view, max_len=400):
         self.line = gl.GLLinePlotItem(antialias=True)
         view.addItem(self.line)
-        self.pts = []   # (x, y, z, boosting)
+        self.pts = []
         self.max_len = max_len
 
     def push(self, xyz, boosting):
@@ -134,7 +125,6 @@ class TrailRenderer:
 
 
 class CarAxesRenderer:
-    """车头三轴指示器：forward=绿, up=红, right=蓝"""
     def __init__(self, view):
         self.fwd = gl.GLLinePlotItem(antialias=True); view.addItem(self.fwd)
         self.up  = gl.GLLinePlotItem(antialias=True); view.addItem(self.up)
@@ -148,12 +138,6 @@ class CarAxesRenderer:
 
 
 class VelocityArrowRenderer:
-    """初始速度方向与力度箭头（带 3D 箭头翼）：
-    - 仅在接收到任何玩家/模型输入之前 (STATE_IDLE 或第 0 帧) 显示，一旦开始输入立即隐藏。
-    - 车辆箭头长度至少等于车体侧向蓝轴长度 (min_len=150.0 uu)，哪怕初速度为 0 也能清晰看到初始指向；
-      随初速度线性增长（最大约 1150 uu）。
-    - 球体箭头当球有初速度时显示，长度随球速大小动态伸缩，直观展示球即将滚动的方向与力度。
-    """
     def __init__(self, view, color=(1.0, 0.9, 0.1, 0.95), width=4):
         self.color = color
         self.width = width
@@ -183,7 +167,6 @@ class VelocityArrowRenderer:
             return
 
         tip = pos_r + dir_u * length
-        # 构造水平面或垂直面正交向量以绘制箭头双翼
         up_ref = np.array([0.0, 0.0, 1.0], dtype=np.float32)
         side = np.cross(dir_u, up_ref)
         sn = float(np.linalg.norm(side))
@@ -199,6 +182,64 @@ class VelocityArrowRenderer:
 
         pts = np.array([pos_r, tip, tip, w1, tip, w2], dtype=np.float32)
         self.line.setData(pos=pts, color=self.color, width=self.width, mode='lines')
+
+    def hide(self):
+        self.line.setData(pos=np.zeros((0, 3), dtype=np.float32))
+
+
+class FocusRegionRenderer:
+    def __init__(self, view, color=(1.0, 0.2, 0.9, 0.8), width=2):
+        self.color = color
+        self.width = width
+        self.line = gl.GLLinePlotItem(antialias=True)
+        view.addItem(self.line)
+
+    def update(self, car_pos, car_fwd, car_rgt, focus_cfg, show=True):
+        if not show or focus_cfg is None or not getattr(focus_cfg, "enabled", False):
+            self.hide()
+            return
+        d_min = max(50.0, float(focus_cfg.dist_min))
+        d_max = min(6000.0, float(focus_cfg.dist_max))
+        a_min = math.radians(float(focus_cfg.angle_deg_min))
+        a_max = math.radians(float(focus_cfg.angle_deg_max))
+        z_draw = max(25.0, float(car_pos[2]))
+
+        fh_x, fh_y = float(car_fwd[0]), float(car_fwd[1])
+        fn = math.hypot(fh_x, fh_y)
+        if fn < 1e-4:
+            fh_x, fh_y = 1.0, 0.0
+        else:
+            fh_x, fh_y = fh_x / fn, fh_y / fn
+        rh_x, rh_y = float(car_rgt[0]), float(car_rgt[1])
+        rn = math.hypot(rh_x, rh_y)
+        if rn < 1e-4:
+            rh_x, rh_y = -fh_y, fh_x
+        else:
+            rh_x, rh_y = rh_x / rn, rh_y / rn
+
+        n_seg = 24
+        angles = np.linspace(a_min, a_max, n_seg + 1)
+        pts = []
+        cx, cy = float(car_pos[0]), float(car_pos[1])
+
+        def _pt(r, ang):
+            ca, sa = math.cos(ang), math.sin(ang)
+            wx = cx + r * (ca * fh_x + sa * rh_x)
+            wy = cy + r * (ca * fh_y + sa * rh_y)
+            return r2r((wx, wy, z_draw))
+
+        for i in range(n_seg):
+            pts.append(_pt(d_min, angles[i]))
+            pts.append(_pt(d_min, angles[i + 1]))
+            pts.append(_pt(d_max, angles[i]))
+            pts.append(_pt(d_max, angles[i + 1]))
+
+        pts.append(_pt(d_min, a_min))
+        pts.append(_pt(d_max, a_min))
+        pts.append(_pt(d_min, a_max))
+        pts.append(_pt(d_max, a_max))
+
+        self.line.setData(pos=np.array(pts, dtype=np.float32), color=self.color, width=self.width, mode='lines')
 
     def hide(self):
         self.line.setData(pos=np.zeros((0, 3), dtype=np.float32))

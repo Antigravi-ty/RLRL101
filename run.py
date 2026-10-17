@@ -1,4 +1,3 @@
-"""统一入口。python run.py train / eval / tuner / tree"""
 import sys, os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -9,6 +8,7 @@ CMDS = {
     "eval":      ["vis/cli_tuner.py"],
     "train":     ["train/train_ppo.py"],
     "train_ppo": ["train/train_ppo.py"],
+    "focus":     ["tools/focus_cli.py"],
     "tree":      ["tools/gen_tree.py"],
 }
 

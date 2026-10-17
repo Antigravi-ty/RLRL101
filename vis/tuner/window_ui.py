@@ -331,7 +331,7 @@ class UIMixin:
 
     def _cfg_text(self):
         c = self.session.cfg
-        return (f"dist={c.distance_reward_scale} time=-{c.time_penalty_per_tick}/t "
-                f"boost=-{c.boost_penalty_per_unit}/u "
-                f"flip=-{c.flip_penalty_base}..-{c.flip_penalty_base + 18*c.flip_penalty_per_100_below} "
+        return (f"dist={c.distance_delta_scale} time=-{c.time_penalty_per_tick}/t "
+                f"boost=-{c.boost_penalty_per_unit}/u(+{c.boost_pickup_bonus}/pad) "
+                f"flip=-{c.flip_base_penalty}..-{c.flip_base_penalty + c.flip_zero_speed_extra:.4f} "
                 f"touch=+{c.touch_bonus:.0f} to=-{c.timeout_penalty:.0f}")

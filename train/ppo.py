@@ -42,6 +42,23 @@ class RolloutBuffer:
         self.values[self.ptr]   = float(value)
         self.ptr += 1
 
+    def add_trajectory(self, obs_arr, act_arr, logp_arr, rew_arr, done_arr, val_arr, adv_arr, ret_arr):
+        k = len(rew_arr)
+        rem = self.n_steps - self.ptr
+        if rem <= 0:
+            return
+        take = min(k, rem)
+        s, e = self.ptr, self.ptr + take
+        self.obs[s:e]        = obs_arr[:take]
+        self.actions[s:e]    = act_arr[:take]
+        self.logprobs[s:e]   = logp_arr[:take]
+        self.rewards[s:e]    = rew_arr[:take]
+        self.dones[s:e]      = done_arr[:take]
+        self.values[s:e]     = val_arr[:take]
+        self.advantages[s:e] = adv_arr[:take]
+        self.returns[s:e]    = ret_arr[:take]
+        self.ptr = e
+
     def is_full(self):
         return self.ptr >= self.n_steps
 
@@ -60,6 +77,21 @@ class RolloutBuffer:
             last_gae_lam = delta + gamma * gae_lambda * next_non_terminal * last_gae_lam
             self.advantages[t] = last_gae_lam
         self.returns[:n] = self.advantages[:n] + self.values[:n]
+
+
+def compute_gae_1d(rewards, values, dones, last_value, gamma=0.997, gae_lambda=0.95, reward_scale=0.05):
+    n = len(rewards)
+    advantages = np.zeros(n, dtype=np.float32)
+    scaled_rewards = rewards * reward_scale
+    last_gae_lam = 0.0
+    for t in reversed(range(n)):
+        next_non_terminal = 1.0 - dones[t]
+        next_val = float(last_value) if t == n - 1 else float(values[t + 1])
+        delta = scaled_rewards[t] + gamma * next_val * next_non_terminal - values[t]
+        last_gae_lam = delta + gamma * gae_lambda * next_non_terminal * last_gae_lam
+        advantages[t] = last_gae_lam
+    returns = advantages + values
+    return advantages, returns
 
 
 def _channel_kl_loss(student_logits, teacher_logits_detached, slices):
@@ -155,8 +187,8 @@ def ppo_update(
             if augment_symmetry and sym_coef > 0.0:
                 mb_obs_m = b_obs_m[mb_inds]
 
-                logits_orig = model.apply_action_mask(model.actor(mb_obs), mb_obs)
-                logits_mirr = model.apply_action_mask(model.actor(mb_obs_m), mb_obs_m)
+                logits_orig = model.apply_action_mask(model.actor(mb_obs), mb_obs, ch4_action=mb_act[:, 4])
+                logits_mirr = model.apply_action_mask(model.actor(mb_obs_m), mb_obs_m, ch4_action=mb_act[:, 4])
                 v_orig = newvalue
                 v_mirr = model.get_value(mb_obs_m)
 
@@ -183,7 +215,8 @@ def ppo_update(
                 sym_losses.append(sym_loss.item())
 
             entropy_loss = entropy.mean()
-            loss = pg_loss - ent_coef * entropy_loss + vf_coef * v_loss + sym_coef * sym_loss
+            bound_loss = model.compute_logit_bound_loss(model.actor(mb_obs)) if hasattr(model, "compute_logit_bound_loss") else 0.0
+            loss = pg_loss - ent_coef * entropy_loss + vf_coef * v_loss + sym_coef * sym_loss + 0.1 * bound_loss
 
             optimizer.zero_grad()
             loss.backward()

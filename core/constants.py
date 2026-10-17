@@ -14,15 +14,42 @@ OBS_DIM = 31
 OBS_V3_DIM = 187
 PPO_HIDDEN_DIM = 256
 
-STICKY_EXPLORE_PROB = 0.05
+STICKY_EXPLORE_PROB = 0.02
 STICKY_DURATION_TICKS = 30
 STICKY_DURATION_STEPS = (STICKY_DURATION_TICKS + TICKS_PER_DECISION - 1) // TICKS_PER_DECISION
 
 LOW_BOOST_PROB = 0.70
 LOW_BOOST_MAX = 33.0
 
-EVAL_GRID_BINS = 16
-EVAL_SAMPLES_PER_BIN = 35
+LOGIT_CLAMP_RANGE = 2.25
+
+NUM_CURRICULUM_STAGES = 8
+EVAL_SAMPLES_PER_STAGE = 24
+EVAL_GRID_BINS = 8
+EVAL_SAMPLES_PER_BIN = 24
+
+# Empirical reference boost used to reach aerial height (from human fast-aerial CSV)
+AERIAL_HEIGHT_BOOST_REF = (
+    (200.0,   1.4),
+    (300.0,   8.9),
+    (400.0,  16.1),
+    (500.0,  22.2),
+    (600.0,  27.8),
+    (700.0,  32.8),
+    (800.0,  37.2),
+    (900.0,  41.7),
+    (1000.0, 45.8),
+    (1100.0, 49.7),
+    (1200.0, 53.6),
+    (1300.0, 57.5),
+    (1400.0, 61.1),
+    (1500.0, 65.0),
+    (1600.0, 68.6),
+    (1700.0, 72.5),
+    (1800.0, 76.1),
+    (1900.0, 79.7),
+    (2000.0, 83.6),
+)
 
 PPO_ACTION_DIMS = [3, 3, 3, 2, 2, 2]
 PPO_LOGITS_DIM = sum(PPO_ACTION_DIMS)

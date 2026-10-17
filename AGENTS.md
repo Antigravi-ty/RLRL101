@@ -1,4 +1,4 @@
-# RLRL101 Agent 指南与运行最佳实践 (纯 PPO 全变体架构)
+# RLRL101 Agent 指南与运行最佳实践 (8-Stage 渐进课程 & 软钳制保险丝 PPO 架构)
 
 ### 1. 极简环境配置 (~200MB 预编译安装，无需 CMake / C++ 编译器)
 ```bash
@@ -13,47 +13,42 @@ pip install pandas
 ### 2. 核心设计规范
 1. **187 维车体中心观测空间 (`core/obs_v3.py`, `OBS_V3_DIM = 187`)**：
    - 包含车体局部坐标系下的球位置/速度、自身速度/角速度、墙面/地面/顶棚距离、动作历史，以及**全场 34 个 Boost Pads（6 大 + 28 小）**的车体局部坐标与激活冷却状态 (`[rel_fwd, rel_right, is_active, cooldown_norm] * 34`)。
-   - 支持从旧版 75 维权重 (`ground_v4_best.pt`) 自动零填充无损升级迁移至 187 维网络 (`adapt_state_dict_input_dim`)。
-2. **零先验偏置 + 无强制 W 掩码 + 30 帧后退方向保持探索 (`core/nn.py`, `train/train_ppo.py`)**：
-   - 清空 `ActorCritic` 输出层人为动作偏置，全 0 初始化；
-   - 移除地面喷气强制按 `W` 掩码，释放 Speed Flip（Boost 同时按 S 取消前翻俯仰）等高阶操作空间；
-   - **30 帧方向保持探索机制**：默认概率 `5%` (`--sticky-prob 0.05`)，触发后连续 30 帧（8 个决策步）锁定后退方向动作空间 `{S, S+A, S+D}`，且最后一个决策帧有 50% 概率输出一次 `Jump`（诱发半翻转 Half-Flip / 后翻加速探索）。
-3. **纯粹奖励函数 (`core/reward.py`)**：
-   - **无触球速度奖励**：触球固定奖励 `+80.0`，通过帧间距离缩减奖励 (`0.01 * Δdist`) 与每帧时间惩罚 (`-0.04/tick`) 自然驱动模型追求最快触球；
-   - **微弱喷气惩罚**：每消耗 1 点 Boost 扣 `0.01` 分（满管 100 点最多扣 `1.0` 分），70% 概率初始 Boost `< 33`；
-   - **速度相关翻滚触发惩罚**：触发翻滚瞬间按起翻前车速扣分（`>=1800 uu/s` 扣 `0.001`，每降低 `100 uu/s` 多扣 `0.0001`，`0 uu/s` 扣 `0.0028`），抑制起步 0 速盲目原地翻滚。
-4. **16-Bin (35 样本/格) Base-36 紧凑评测编码 (`train/checkpoint.py`, `vis/cli_tuner.py`)**：
-   - 4 个距离段 × 4 个相对方位角（正前 F、正右 R、正左 L、正后 B）共 16 个分位格，每格 35 个固定种子样本（共 560 题）；
-   - 单行输出 16 字符进度码（`0-9` 代表 0~9 次命中，`a-z` 代表 10~35 次命中，全部 35/35 满分输出 `zzzzzzzzzzzzzzzz`）及平均用时。
+   - 首层正交初始化针对 136 维 Boost Pads (`0.15x`) 与垂直高度 Z 通道 (`3.0x`) 进行了信噪比均衡，确保冷启动与空中球阶段特征清晰。
+2. **动作掩码、保险丝 1 (Projected STE 软钳制) 与回合初 30 帧后退探索 (`core/nn.py`, `core/env.py`)**：
+   - **地面喷气强制前驱掩码**：仅在 `on_ground & boost==1 & has_nitro` 时屏蔽 `S` 与 `None`（强制 `W`），空中完全放开俯仰与喷气组合；
+   - **保险丝 1（Projected STE 软钳制）**：训练采样 (`deterministic=False`) 时对每个动作头的去均值 Logits 施加 `±2.25` 钳制（最大跨度 `4.5`，保底约 `1.1%` 探索活口），并通过单向投影直通估计器 (`_ProjectedClampSTE`) 保证只有改善回报的探索方向反传梯度；评估路径 (`deterministic=True`) 显式采用 `argmax / temperature=0`（不施加钳制）；
+   - **回合初 30 帧后退探索 (`--sticky-prob 0.02`)**：仅在 `env.reset()` 开局有 `2%` 概率触发一次 30 物理帧（0.25s）的随机后退动作 `{S, S+A, S+D}`，并在第 30 帧有 50% 概率触发 `Jump`，随后完全交由模型自主决策。
+3. **三维矢量距离奖励与 Boost Pad 回调 (`core/reward.py`, `core/env.py`)**：
+   - **三维矢量距离差分**：按 `(|dx_prev|-|dx_now|) + (|dy_prev|-|dy_now|) + (|dz_prev|-|dz_now|)` 分别计算三轴接近量之和（缩放系数 `0.01`），无论静止球或动态球，单局可获距离总分恒由初始三轴距离决定；
+   - **Boost Pad 拾取奖励 (`+0.12`)**：严格通过 `arena.set_boost_pickup_callback` 监听（绝不使用 `cur_boost > prev_boost` 判定），每拾取任意一个大小氮气垫奖励 `+0.12`。
+4. **8-Stage 渐进课程与高空静止球阶梯 (`core/env.py`, `train/checkpoint.py`)**：
+   - **8 个渐进阶段**：`S1(地面球静车静)` -> `S2(地面球动车静)` -> `S3(地面球静车动)` -> `S4(地面球动车动)` -> `S5(空中悬停球-车静)` -> `S6(空中悬停球-车动)` -> `S7(空中动态球-车静)` -> `S8(空中动态球-车动)`；
+   - **按阶准入与异步 Best 评估**：Stage $K$ 激活时，前 $K$ 个阶段平分训练采样权重（`Stage 1..6` 要求前 $K$ 格全部 $\ge 70\%$ 才触发后台异步 `Best` 评估，`Stage 7` 豁免第 7 格检查前 6 格，`Stage 8` 要求全部 8 格 $\ge 70\%$）；
+   - **高空悬停球 (`!touched` 零重力锁定) 与高度/氮气子状态码 (`air=...`)**：
+     - `Z0400_DJ`：高度 `<= 400 uu`（纯 Double Jump 可达），70% 概率初始 Boost `< 33`；
+     - `Z0500_B100` .. `Z2000_B100`：球高 `> 400 uu` 覆写为满氮气 `100`，每次专门考核顶部 `[max_z-100, max_z]` 区间 100 个随机位置，命中率 $\ge 70\%$ 则上限 `+100 uu` 直至 `2000 uu`；
+     - `Z2000_M+30` -> `M+18` -> `M+06` -> `M+00`：满高 `2000 uu` 达标后，对 `> 500 uu` 高空球按经验 CSV (`AERIAL_HEIGHT_BOOST_REF`) 对应高度氮气量加上裕量（从 `+30` 起步，每次满 70% 递减 `12` 直至 `+0`），全部完成后自动解锁动态高空球 (`S7`, `S8`)。
 
 ---
 
-### 3. 统一运行入口与 CLI 工具
-- **PPO 多核并行全变体训练 (`python run.py train`)**：
+### 3. 统一运行入口与推荐终端命令
+- **8-Stage 渐进课程全流程训练 (`python run.py train`)**：
   ```bash
-  # 多核并行训练全变体场景 (继承 ground_v4 最佳权重自动扩维至 187d，开启 5% 30帧后退探索)
-  python run.py train --mode all --prefix ground_v4 --save-prefix all_v1 --from best --workers 4 --sticky-prob 0.05
+  # 从零启动 8-Stage 自动晋级课程训练 (推荐 4 核并行 + 异步评估)
+  python run.py train --mode curriculum --save-prefix cur_v1 --from none --workers 4 --sticky-prob 0.02 --logit-clamp 2.25
 
-  # 从零开始多核训练
-  python run.py train --mode all --save-prefix all_v0 --from none --workers 4 --sticky-prob 0.05
+  # 断点续训最新权重
+  python run.py train --mode curriculum --prefix cur_v1 --from latest --workers 4 --sticky-prob 0.02 --logit-clamp 2.25
   ```
-- **动态 Focus Region 靶向训练与 Tuner 实时联动 (`python run.py focus`)**：
+- **多核吞吐量与物理帧率基准测试 (`python run.py bench`)**：
   ```bash
-  # 开启正后方球专项聚焦 (50% 概率在车正后方生成，50% 全场随机，训练进程与 3D Tuner 自动热加载)
-  python run.py focus --preset back --prob 0.5 --dist 300 2500
-
-  # 自定义距离与角度范围并热更新
-  python run.py focus --prob 0.5 --dist 500 2000 --angle 135 180
-
-  # 关闭专项聚焦，恢复 100% 全场随机
-  python run.py focus --off
+  python run.py bench --workers 1,2,4,8 --steps 2048
   ```
-- **CLI 16-Bin 排行榜对比与单模型评估 (`python run.py cli`)**：
+- **CLI 8-Stage 矩阵评估与排行榜 (`python run.py cli`)**：
   ```bash
-  python run.py cli
-  python run.py cli --prefix ground_v4
+  python run.py cli --prefix cur_v1 --from best
   ```
-- **3D 交互式 GUI Tuner（支持 `P` 键切换 REWARD/dist 与 OBS 的一阶差分 Delta 视图，实时显示 Focus Region 扇区）**：
+- **3D 交互式 GUI Tuner (`python run.py tuner`)**：
   ```bash
-  python run.py tuner --prefix ground_v4
+  python run.py tuner --prefix cur_v1
   ```

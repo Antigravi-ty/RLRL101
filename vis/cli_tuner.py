@@ -3,66 +3,64 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.env import BallReachEnv, EVAL_DIST_LABELS, EVAL_ANGLE_LABELS
+from core.env import BallReachEnv, STAGE_NAMES, STAGE_SHORT_LABELS
 from core.constants import (
-    TICKS_PER_DECISION, MAX_DECISIONS_STAGE0, EVAL_SAMPLES_PER_BIN,
+    TICKS_PER_DECISION, MAX_DECISIONS_STAGE0, EVAL_SAMPLES_PER_STAGE, NUM_CURRICULUM_STAGES,
 )
 from train.checkpoint import (
     load_ppo_model, ckpt_paths, discover_prefixes,
-    evaluate_16bin_grid, count_to_base36_char,
+    evaluate_8stage_grid, rate_to_digit_char,
 )
 
 
-def evaluate_model(ckpt_path, eval_seed=20261016, samples_per_bin=EVAL_SAMPLES_PER_BIN, verbose=False):
+def evaluate_model(ckpt_path, eval_seed=20261016, samples_per_stage=EVAL_SAMPLES_PER_STAGE, verbose=False):
     if not os.path.exists(ckpt_path):
         print(f"[cli_tuner] 错误: 找不到权重文件 {ckpt_path}")
         return None
 
-    env = BallReachEnv(mode="all")
+    env = BallReachEnv(mode="curriculum", stage_level=NUM_CURRICULUM_STAGES)
     model, ckpt = load_ppo_model(ckpt_path, device="cpu")
-    ckpt_mode = ckpt.get("mode", "all")
+    ckpt_mode = ckpt.get("mode", "curriculum")
+    ckpt_stage_lv = ckpt.get("stage_level", NUM_CURRICULUM_STAGES)
 
     print("========================================================================================")
-    print(f"  CLI Tuner [PPO]: 评估 {os.path.basename(ckpt_path)} (ckpt_mode={ckpt_mode})")
+    print(f"  CLI Tuner [PPO]: 评估 {os.path.basename(ckpt_path)} (ckpt_mode={ckpt_mode}, stage_lv={ckpt_stage_lv})")
     print(f"  ep={ckpt.get('episode', '?')}  note={ckpt.get('note', '')}")
     print("========================================================================================")
 
     t0 = time.time()
-    res = evaluate_16bin_grid(
+    res = evaluate_8stage_grid(
         env, model,
         max_decisions=MAX_DECISIONS_STAGE0,
-        samples_per_bin=samples_per_bin,
+        samples_per_stage=samples_per_stage,
+        active_stages=NUM_CURRICULUM_STAGES,
         seed=eval_seed,
     )
-    print(f"\n[16-Bin 分位评测 ({res['n_total']} 场景 = 16x{samples_per_bin}, 满分='zzzzzzzzzzzzzzzz', seed={eval_seed})]")
-    print(f"  16-Bin 编码 (0-9a-z)        : [{res['grid_str']}]  (各格命中: {res['bin_touches']})")
+    print(f"\n[8-Stage 课程矩阵评测 ({res['n_total']} 场景 = 8x{samples_per_stage}, 达标线='77777777', seed={eval_seed})]")
+    print(f"  8-Stage 编码 (0-9)          : [{res['grid_str']}]  (各阶命中: {res['bin_touches']})")
     print(f"  总触球率 (Touch Rate)       : {res['touch_count']}/{res['n_total']} ({res['touch_rate']:.1%})")
     print(f"  命中平均用时 (Touch Time)   : {res['touch_sec']:.2f}s ({res['touch_ticks']:.1f}f / {res['touch_dec']:.2f}步)")
     print(f"  全样本含罚用时 (All Time)   : {res['all_sec']:.2f}s ({res['all_ticks']:.1f}f, 漏球按 {MAX_DECISIONS_STAGE0*4}f 计)")
     print(f"  触发跳跃/翻滚局数 (Jump/Flip): Jump={res['jump_eps']}/{res['n_total']} | Flip={res['flip_eps']}/{res['n_total']}")
     print(f"  平均总分 (Mean r_cum)       : {res['mean_rcum']:+.2f}")
 
-    print("\n  [4 距离段 x 4 方位角 (F/R/L/B) 矩阵明细]:")
-    header_angles = "  ".join(f"{a:>8}" for a in EVAL_ANGLE_LABELS)
-    print(f"  {'Dist \\ Angle':<12}  {header_angles}")
-    for d_idx, d_lab in enumerate(EVAL_DIST_LABELS):
-        cells = []
-        for a_idx in range(4):
-            b_idx = d_idx * 4 + a_idx
-            cnt = res["bin_touches"][b_idx]
-            ch = count_to_base36_char(cnt)
-            cells.append(f"{ch}({cnt:>2}/{samples_per_bin})")
-        print(f"  {d_lab:<12}  " + "  ".join(f"{c:>8}" for c in cells))
+    print("\n  [8-Stage 课程格子明细]:")
+    for s_idx, s_name in enumerate(STAGE_NAMES):
+        cnt = res["bin_touches"][s_idx]
+        rate = res["stage_rates"][s_idx]
+        ch = rate_to_digit_char(rate)
+        bar = "█" * int(round(rate * 10)) + "░" * (10 - int(round(rate * 10)))
+        print(f"    {s_name:<26} : [{ch}] {bar}  {cnt:>2}/{samples_per_stage} ({rate:5.1%})")
 
     dt = time.time() - t0
     print(f"\nelapsed = {dt:.2f}s")
     return res
 
 
-def benchmark_all_prefixes(prefixes=None, from_tag="best", eval_seed=20261016, samples_per_bin=EVAL_SAMPLES_PER_BIN):
+def benchmark_all_prefixes(prefixes=None, from_tag="best", eval_seed=20261016, samples_per_stage=EVAL_SAMPLES_PER_STAGE):
     if not prefixes:
         prefixes = discover_prefixes()
-    env = BallReachEnv(mode="all")
+    env = BallReachEnv(mode="curriculum", stage_level=NUM_CURRICULUM_STAGES)
 
     rows = []
     for p in prefixes:
@@ -73,10 +71,11 @@ def benchmark_all_prefixes(prefixes=None, from_tag="best", eval_seed=20261016, s
         if not os.path.exists(path):
             continue
         model, ckpt = load_ppo_model(path, device="cpu")
-        res = evaluate_16bin_grid(
+        res = evaluate_8stage_grid(
             env, model,
             max_decisions=MAX_DECISIONS_STAGE0,
-            samples_per_bin=samples_per_bin,
+            samples_per_stage=samples_per_stage,
+            active_stages=NUM_CURRICULUM_STAGES,
             seed=eval_seed,
         )
         rows.append({
@@ -99,19 +98,19 @@ def benchmark_all_prefixes(prefixes=None, from_tag="best", eval_seed=20261016, s
         print("[cli_tuner] ./checkpoints/ 下未找到任何模型权重文件。")
         return []
 
-    n_tot = 16 * samples_per_bin
+    n_tot = NUM_CURRICULUM_STAGES * samples_per_stage
     print("========================================================================================================================")
-    print(f"  PPO 策略 16-Bin 基准排行榜 ({n_tot} 场景 = 16x{samples_per_bin}, 完美编码='zzzzzzzzzzzzzzzz', seed={eval_seed})")
+    print(f"  PPO 策略 8-Stage 课程矩阵排行榜 ({n_tot} 场景 = 8x{samples_per_stage}, 达标线='77777777', seed={eval_seed})")
     print("========================================================================================================================")
     rows_sorted = sorted(rows, key=lambda r: (r["all_f"], -r["tc"]))
-    print(f"{'排序':<4} {'策略名称 (Prefix)':<18} {'16-Bin (0-9a-z)':<18} {'触球率':<13} {'全样本均时(▼)':<16} {'命中均时':<16} {'翻滚局数':<10} {'平均总分'}")
+    print(f"{'排序':<4} {'策略名称 (Prefix)':<18} {'8-Stage (0-9)':<16} {'触球率':<13} {'全样本均时(▼)':<16} {'命中均时':<16} {'翻滚局数':<10} {'平均总分'}")
     print("-" * 120)
     for idx, r in enumerate(rows_sorted, 1):
         tc_str = f"{r['tc']}/{r['tot']}({r['tr']:.0%})"
         all_str = f"{r['all_sec']:.2f}s ({r['all_f']:.0f}f)"
         tch_str = f"{r['touch_sec']:.2f}s ({r['touch_f']:.0f}f)"
         fl_str = f"{r['flip']}/{r['tot']}"
-        print(f"{idx:<6} {r['prefix']:<18} [{r['grid_str']}] {tc_str:<13} {all_str:<18} {tch_str:<16} {fl_str:<11} {r['rcum']:+.2f}")
+        print(f"{idx:<6} {r['prefix']:<18} [{r['grid_str']}]       {tc_str:<13} {all_str:<18} {tch_str:<16} {fl_str:<11} {r['rcum']:+.2f}")
     print("========================================================================================================================")
     return rows
 
@@ -176,20 +175,13 @@ def verify_and_compare_csv(csv_path, ckpt_path=None):
 
 
 def main():
-    p = argparse.ArgumentParser(description="CLI multi-checkpoint 16-bin evaluator & CSV diagnostics")
-    p.add_argument("--prefix", type=str, nargs="*", default=None,
-                   help="1 个或多个模型 prefix (不传则自动评测 ./checkpoints/ 下全部模型并输出排行榜)")
-    p.add_argument("--ckpt", type=str, default=None,
-                   help="直接指定单个模型权重文件路径")
-    p.add_argument("--from", dest="from_ckpt", default="best",
-                   choices=["latest", "best"],
-                   help="用 prefix 时读哪个权重 (default: best)")
-    p.add_argument("--samples", type=int, default=EVAL_SAMPLES_PER_BIN,
-                   help=f"每个分位格样本数 (default: {EVAL_SAMPLES_PER_BIN} -> 16x{EVAL_SAMPLES_PER_BIN}={16*EVAL_SAMPLES_PER_BIN} 场景)")
-    p.add_argument("--seed", type=int, default=20261016,
-                   help="评估随机种子 (default: 20261016)")
-    p.add_argument("--verify", type=str, nargs="+", default=None,
-                   help="校验并诊断指定的 1 个或多个 CSV 轨迹文件")
+    p = argparse.ArgumentParser(description="CLI multi-checkpoint 8-stage evaluator & CSV diagnostics")
+    p.add_argument("--prefix", type=str, nargs="*", default=None)
+    p.add_argument("--ckpt", type=str, default=None)
+    p.add_argument("--from", dest="from_ckpt", default="best", choices=["latest", "best"])
+    p.add_argument("--samples", type=int, default=EVAL_SAMPLES_PER_STAGE)
+    p.add_argument("--seed", type=int, default=20261016)
+    p.add_argument("--verify", type=str, nargs="+", default=None)
     p.add_argument("--verbose", action="store_true")
     args = p.parse_args()
 
@@ -205,7 +197,7 @@ def main():
                 prefixes=prefixes,
                 from_tag=args.from_ckpt,
                 eval_seed=args.seed,
-                samples_per_bin=args.samples,
+                samples_per_stage=args.samples,
             )
             return
 
@@ -222,7 +214,7 @@ def main():
     evaluate_model(
         ckpt_path,
         eval_seed=args.seed,
-        samples_per_bin=args.samples,
+        samples_per_stage=args.samples,
         verbose=args.verbose,
     )
 

@@ -9,6 +9,7 @@ CMDS = {
     "train":     ["train/train_ppo.py"],
     "train_ppo": ["train/train_ppo.py"],
     "focus":     ["tools/focus_cli.py"],
+    "bench":     ["tools/bench.py"],
     "tree":      ["tools/gen_tree.py"],
 }
 

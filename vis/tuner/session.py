@@ -123,10 +123,13 @@ class Session:
                 self.cfg,
                 prev_dist=prev["dist"],
                 new_dist=snap["dist"],
+                prev_vec_dist=prev.get("vec_dist"),
+                new_vec_dist=snap.get("vec_dist"),
                 touched=touched,
                 timeout=timeout,
                 ticks_elapsed=1,
                 boost_used=boost_used,
+                boost_pickups=self.env.last_boost_pickups,
                 flip_triggered=flip_triggered,
                 flip_trigger_speed=flip_trigger_speed,
             )

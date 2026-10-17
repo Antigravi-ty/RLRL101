@@ -14,6 +14,7 @@ except ImportError:
 
 from .constants import (
     OBS_V3_DIM, PPO_ACTION_DIMS, PPO_LOGITS_DIM, PPO_HIDDEN_DIM,
+    LOGIT_CLAMP_RANGE,
 )
 
 
@@ -26,13 +27,40 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 _BaseModule = nn.Module if _TORCH_AVAILABLE else object
 
 
+if _TORCH_AVAILABLE:
+    class _ProjectedClampSTE(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, x, limit):
+            ctx.save_for_backward(x)
+            ctx.limit = float(limit)
+            return torch.clamp(x, -ctx.limit, ctx.limit)
+
+        @staticmethod
+        def backward(ctx, grad_output):
+            (x,) = ctx.saved_tensors
+            lim = ctx.limit
+            allow = (
+                ((x >= -lim) & (x <= lim))
+                | ((x < -lim) & (grad_output < 0.0))
+                | ((x > lim) & (grad_output > 0.0))
+            )
+            return grad_output * allow.to(grad_output.dtype), None
+
+
 class ActorCritic(_BaseModule):
-    def __init__(self, obs_dim=OBS_V3_DIM, hidden=PPO_HIDDEN_DIM, action_dims=PPO_ACTION_DIMS):
+    def __init__(
+        self,
+        obs_dim=OBS_V3_DIM,
+        hidden=PPO_HIDDEN_DIM,
+        action_dims=PPO_ACTION_DIMS,
+        logit_clamp=LOGIT_CLAMP_RANGE,
+    ):
         super().__init__()
         self.obs_dim = int(obs_dim)
         self.hidden_dim = int(hidden)
         self.action_dims = list(action_dims)
         self.logits_dim = sum(self.action_dims)
+        self.logit_clamp = float(logit_clamp)
         self._slices = []
         cur = 0
         for d in self.action_dims:
@@ -55,6 +83,17 @@ class ActorCritic(_BaseModule):
             layer_init(nn.Linear(self.hidden_dim, 1), std=1.0, bias_const=0.0),
         )
 
+        # Balance initial gradient SNR for 187d obs:
+        # 136 dimensions [46:182] are the 34 boost pads; scaling their initial input
+        # weights by 0.15 prevents 34 pads from drowning out the 15 kinematics/ball dims at ep 0.
+        if self.obs_dim == 187:
+            with torch.no_grad():
+                self.actor[0].weight[:, 46:182].mul_(0.15)
+                self.critic[0].weight[:, 46:182].mul_(0.15)
+                z_cols = [4, 11, 15, 19, 31, 32, 33, 35]
+                self.actor[0].weight[:, z_cols].mul_(3.0)
+                self.critic[0].weight[:, z_cols].mul_(3.0)
+
     def forward(self, x):
         return self.actor(x), self.critic(x)
 
@@ -68,8 +107,33 @@ class ActorCritic(_BaseModule):
             last_linear.bias[9] = float(off_bias)
             last_linear.bias[10] = 0.0
 
-    def apply_action_mask(self, raw_logits, obs, ch4_action=None):
-        masked = raw_logits.clone()
+    def _clamp_raw_logits(self, raw_logits):
+        if self.logit_clamp <= 0.0:
+            return raw_logits
+        parts = []
+        for (s, e) in self._slices:
+            ch_l = raw_logits[:, s:e]
+            ch_c = ch_l - ch_l.mean(dim=-1, keepdim=True)
+            parts.append(_ProjectedClampSTE.apply(ch_c, self.logit_clamp))
+        return torch.cat(parts, dim=-1)
+
+    def compute_logit_bound_loss(self, raw_logits):
+        if self.logit_clamp <= 0.0:
+            return torch.tensor(0.0, device=raw_logits.device)
+        losses = []
+        for (s, e) in self._slices:
+            ch_l = raw_logits[:, s:e]
+            ch_c = ch_l - ch_l.mean(dim=-1, keepdim=True)
+            excess = F.relu(ch_c.abs() - self.logit_clamp)
+            losses.append((excess * excess).mean())
+        return torch.stack(losses).mean()
+
+    def apply_action_mask(self, raw_logits, obs, ch4_action=None, clamp_logits=True):
+        if clamp_logits and self.logit_clamp > 0.0:
+            masked = self._clamp_raw_logits(raw_logits)
+        else:
+            masked = raw_logits.clone()
+
         on_ground = obs[:, 24] > 0.5
         in_air    = ~on_ground
         has_nitro = obs[:, 29] > 1e-4
@@ -79,6 +143,11 @@ class ActorCritic(_BaseModule):
         masked[on_ground, 6] = -1e9
         masked[on_ground, 8] = -1e9
         masked[in_air, 14] = -1e9
+
+        if ch4_action is not None:
+            force_w = on_ground & (ch4_action == 1) & has_nitro
+            masked[force_w, 0] = -1e9
+            masked[force_w, 1] = -1e9
         return masked
 
     @((torch.no_grad()) if _TORCH_AVAILABLE else (lambda f: f))
@@ -86,6 +155,11 @@ class ActorCritic(_BaseModule):
         x = torch.from_numpy(obs_np)
         logits = self.actor(x).numpy().copy()
         val = float(self.critic(x).item())
+
+        if not deterministic and self.logit_clamp > 0.0:
+            for (s, e) in self._slices:
+                ch_l = logits[s:e]
+                logits[s:e] = np.clip(ch_l - np.mean(ch_l), -self.logit_clamp, self.logit_clamp)
 
         on_ground = bool(obs_np[24] > 0.5)
         has_nitro = bool(obs_np[29] > 1e-4)
@@ -101,7 +175,7 @@ class ActorCritic(_BaseModule):
         act = np.empty(len(self._slices), dtype=np.int64)
         logp_total = 0.0
 
-        for ch_idx in range(len(self._slices)):
+        def _sample_ch(ch_idx):
             s, e = self._slices[ch_idx]
             l = logits[s:e]
             l_max = np.max(l)
@@ -111,7 +185,7 @@ class ActorCritic(_BaseModule):
             if forced_action_overrides is not None and ch_idx in forced_action_overrides:
                 a = int(forced_action_overrides[ch_idx])
             elif deterministic:
-                a = int(np.argmax(probs))
+                a = int(np.argmax(l))
             else:
                 r = np.random.random()
                 c = 0.0
@@ -122,7 +196,19 @@ class ActorCritic(_BaseModule):
                         a = k
                         break
             act[ch_idx] = a
-            logp_total += float(l[a] - l_max - np.log(sum_exp))
+            return float(l[a] - l_max - np.log(sum_exp))
+
+        # 1. Sample ch4 (Boost) first
+        logp_total += _sample_ch(4)
+
+        # 2. If on_ground and Boost==On and has_nitro, mask out S(0) and None(1) -> force W(2)
+        if on_ground and act[4] == 1 and has_nitro:
+            logits[0] = -1e9
+            logits[1] = -1e9
+
+        # 3. Sample remaining channels (0, 1, 2, 3, 5)
+        for i in (0, 1, 2, 3, 5):
+            logp_total += _sample_ch(i)
 
         return act, logp_total, val
 
@@ -133,13 +219,40 @@ class ActorCritic(_BaseModule):
 
         raw_logits = self.actor(x)
         value = self.critic(x).squeeze(-1)
-        logits = self.apply_action_mask(raw_logits, x)
 
-        acts = []
-        logprobs = []
-        entropies = []
+        use_clamp = (not deterministic) or (action is not None)
+        logits = self.apply_action_mask(raw_logits, x, ch4_action=None, clamp_logits=use_clamp)
 
-        for i, (s, e) in enumerate(self._slices):
+        s4, e4 = self._slices[4]
+        l4 = logits[:, s4:e4]
+        log_p4 = F.log_softmax(l4, dim=-1)
+        p4 = log_p4.exp()
+        if action is None:
+            if deterministic:
+                a4 = torch.argmax(l4, dim=-1)
+            else:
+                a4 = torch.multinomial(p4, 1).squeeze(-1)
+        else:
+            a4 = action[:, 4]
+
+        on_ground = x[:, 24] > 0.5
+        has_nitro = x[:, 29] > 1e-4
+        force_w = on_ground & (a4 == 1) & has_nitro
+        if force_w.any():
+            logits = logits.clone()
+            logits[force_w, 0] = -1e9
+            logits[force_w, 1] = -1e9
+
+        acts = [None] * len(self._slices)
+        logprobs = [None] * len(self._slices)
+        entropies = [None] * len(self._slices)
+
+        acts[4] = a4
+        logprobs[4] = log_p4.gather(-1, a4.unsqueeze(-1)).squeeze(-1)
+        entropies[4] = -(p4 * log_p4).sum(dim=-1)
+
+        for i in (0, 1, 2, 3, 5):
+            s, e = self._slices[i]
             l = logits[:, s:e]
             log_p = F.log_softmax(l, dim=-1)
             p = log_p.exp()
@@ -148,11 +261,11 @@ class ActorCritic(_BaseModule):
                     a = torch.argmax(l, dim=-1)
                 else:
                     a = torch.multinomial(p, 1).squeeze(-1)
-                acts.append(a)
+                acts[i] = a
             else:
                 a = action[:, i]
-            logprobs.append(log_p.gather(-1, a.unsqueeze(-1)).squeeze(-1))
-            entropies.append(-(p * log_p).sum(dim=-1))
+            logprobs[i] = log_p.gather(-1, a.unsqueeze(-1)).squeeze(-1)
+            entropies[i] = -(p * log_p).sum(dim=-1)
 
         if action is None:
             action = torch.stack(acts, dim=-1)
@@ -171,7 +284,9 @@ class ActorCritic(_BaseModule):
             if x.dim() == 1:
                 x = x.unsqueeze(0)
             raw_logits = self.actor(x)
-            logits = self.apply_action_mask(raw_logits, x).squeeze(0)
+            logits = self.apply_action_mask(raw_logits, x, ch4_action=None, clamp_logits=True)
+            a4 = torch.argmax(logits[:, 11:13], dim=-1)
+            logits = self.apply_action_mask(raw_logits, x, ch4_action=a4, clamp_logits=True).squeeze(0)
             value = float(self.critic(x).squeeze().item())
             probs = [F.softmax(logits[s:e], dim=-1).cpu().numpy() for (s, e) in self._slices]
         return probs, value

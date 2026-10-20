@@ -94,11 +94,13 @@ class RenderMixin:
             on_g = bool(snap.get("on_ground", cs.is_on_ground))
             if on_g:
                 av = cs.ang_vel
+                up_tuple = snap.get("up", (float(cs.rot_mat.up.x), float(cs.rot_mat.up.y), float(cs.rot_mat.up.z)))
                 contours_w = self.reach_engine.compute_world_contours(
                     car_pos, snap["car_vel"], snap["fwd"], snap["right"],
+                    up_dir=up_tuple,
                     ang_vel=(float(av.x), float(av.y), float(av.z)),
                 )
-                self.ground_iso.update(car_pos, contours_w, on_ground=True)
+                self.ground_iso.update(car_pos, contours_w, on_ground=True, up_dir_w=up_tuple)
             else:
                 self.ground_iso.hide()
 
@@ -167,11 +169,14 @@ class RenderMixin:
         if hasattr(self, "ground_iso") and hasattr(self, "reach_engine"):
             on_g = bool(fr.get("on_ground", True))
             if on_g:
+                up_tuple = fr.get("up", (0.0, 0.0, 1.0))
                 contours_w = self.reach_engine.compute_world_contours(
                     fr["car_pos"], fr.get("car_vel", (0.0, 0.0, 0.0)),
                     fr["fwd"], fr["right"],
+                    up_dir=up_tuple,
+                    ang_vel=fr.get("car_ang", (0.0, 0.0, 0.0)),
                 )
-                self.ground_iso.update(fr["car_pos"], contours_w, on_ground=True)
+                self.ground_iso.update(fr["car_pos"], contours_w, on_ground=True, up_dir_w=up_tuple)
             else:
                 self.ground_iso.hide()
 

@@ -269,13 +269,19 @@ class GroundIsochroneRenderer:
 
         self.visible = True
 
-    def update(self, car_pos_w, contours_w, on_ground=True):
+    def update(self, car_pos_w, contours_w, on_ground=True, up_dir_w=None):
         if not self.visible or (not on_ground) or not contours_w:
             self.hide()
             return
 
         car_r = r2r(car_pos_w)
-        car_r[2] = 20.0
+        if up_dir_w is not None:
+            up_r = vec_r2r_tuple(up_dir_w)
+            un = float(np.linalg.norm(up_r))
+            if un > 1e-4:
+                car_r += (up_r / un) * 6.0
+        else:
+            car_r[2] = max(car_r[2], 18.0) + 6.0
         prev_ring_r = None
 
         for h in range(3):

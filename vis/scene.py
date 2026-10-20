@@ -323,6 +323,77 @@ class GroundIsochroneRenderer:
             self.fills[h].setMeshData(vertexes=empty_v, faces=empty_f)
 
 
+class AerialIsochroneRenderer:
+    """Renders 1s, 2s, and 3s 3D aerial reachable bubbles (isochrones) with normal shading and contour rib lines."""
+
+    COLORS_RIB = (
+        (0.10, 1.00, 0.70, 0.85),  # 1.0s: Spring Cyan
+        (1.00, 0.85, 0.15, 0.80),  # 2.0s: Warm Gold
+        (1.00, 0.30, 0.70, 0.75),  # 3.0s: Electric Rose
+    )
+
+    def __init__(self, view):
+        self.view = view
+        self.meshes = []
+        self.rib_lines = []
+
+        for h in range(3):
+            mesh = gl.GLMeshItem(
+                vertexes=np.zeros((3, 3), dtype=np.float32),
+                faces=np.zeros((1, 3), dtype=np.int32),
+                smooth=False,
+                drawEdges=False,
+                glOptions="translucent",
+            )
+            view.addItem(mesh)
+            self.meshes.append(mesh)
+
+            rib = gl.GLLinePlotItem(antialias=True)
+            rib.setData(pos=np.zeros((0, 3), dtype=np.float32), color=self.COLORS_RIB[h], width=2.0)
+            view.addItem(rib)
+            self.rib_lines.append(rib)
+
+        self.visible = True
+
+    def update(self, bubble_data_list, mode="ALL"):
+        if not self.visible or mode == "OFF" or not bubble_data_list:
+            self.hide()
+            return
+
+        active_indices = (0, 1, 2) if mode == "ALL" else ((0, 1) if mode == "1s+2s" else (0,))
+
+        for h in range(3):
+            if h in active_indices and h < len(bubble_data_list):
+                bdata = bubble_data_list[h]
+                w_verts = bdata["verts"]
+                # Convert world coordinates to OpenGL: X -> -X
+                gl_verts = w_verts.copy()
+                gl_verts[:, 0] = -gl_verts[:, 0]
+                self.meshes[h].setMeshData(
+                    vertexes=gl_verts,
+                    faces=bdata["faces"],
+                    faceColors=bdata["face_colors"],
+                )
+
+                w_ribs = bdata["ribs"]
+                gl_ribs = w_ribs.copy()
+                gl_ribs[:, 0] = -gl_ribs[:, 0]
+                self.rib_lines[h].setData(pos=gl_ribs, color=self.COLORS_RIB[h], width=2.0)
+            else:
+                empty_v = np.zeros((3, 3), dtype=np.float32)
+                empty_f = np.zeros((0, 3), dtype=np.int32)
+                self.meshes[h].setMeshData(vertexes=empty_v, faces=empty_f)
+                self.rib_lines[h].setData(pos=np.zeros((0, 3), dtype=np.float32))
+
+    def hide(self):
+        empty_pos = np.zeros((0, 3), dtype=np.float32)
+        empty_v = np.zeros((3, 3), dtype=np.float32)
+        empty_f = np.zeros((0, 3), dtype=np.int32)
+        for h in range(3):
+            self.meshes[h].setMeshData(vertexes=empty_v, faces=empty_f)
+            self.rib_lines[h].setData(pos=empty_pos)
+
+
 class BallGuideLinesRenderer:
     """Draws 6 spatial reference line segments from the Ball to the 6 arena boundary planes."""
 

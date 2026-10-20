@@ -522,7 +522,9 @@ def verify_tuner_headless():
     w.use_auto = False
     w.session.reset()
     assert hasattr(w, "external_blob") and hasattr(w, "ground_iso") and hasattr(w, "reach_engine")
+    assert hasattr(w, "aerial_iso") and hasattr(w, "aerial_engine")
     assert w.reach_engine.mode == "model"
+    assert w.aerial_iso_mode == "ALL"
 
     # Press 3 -> Free Camera mode (focused on external 3D blob, car input masked)
     w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_3))
@@ -546,6 +548,16 @@ def verify_tuner_headless():
     assert w.reach_engine.mode == "rollout"
     w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_K))
     assert w.reach_engine.mode == "model"
+
+    # Press L -> Cycle Aerial 3D Isochrone modes: ALL -> 1s+2s -> 1s -> OFF -> ALL
+    w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_L))
+    assert w.aerial_iso_mode == "1s+2s"
+    w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_L))
+    assert w.aerial_iso_mode == "1s"
+    w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_L))
+    assert w.aerial_iso_mode == "OFF"
+    w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_L))
+    assert w.aerial_iso_mode == "ALL"
 
     # Press 2 -> POV Camera, Press 1 -> Center Camera
     w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_2))

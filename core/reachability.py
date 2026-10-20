@@ -370,3 +370,148 @@ class SurfaceReachabilityEngine:
 
 # Backward compatibility alias
 GroundReachabilityEngine = SurfaceReachabilityEngine
+
+
+class AerialReachabilityEngine:
+    """Computes 3D aerial reachability isochrone bubbles (1s / 2s / 3s) dynamically driven by Boost amount."""
+
+    def __init__(self, n_lat: int = 12, n_lon: int = 20):
+        self.n_lat = n_lat
+        self.n_lon = n_lon
+        self.thetas = np.linspace(0.0, math.pi, n_lat + 1, dtype=np.float32)
+        self.phis = np.linspace(0.0, 2.0 * math.pi, n_lon, endpoint=False, dtype=np.float32)
+        T_grid, P_grid = np.meshgrid(self.thetas, self.phis, indexing="ij")
+
+        Dx = np.sin(T_grid) * np.cos(P_grid)
+        Dy = np.sin(T_grid) * np.sin(P_grid)
+        Dz = np.cos(T_grid)
+        self.D_unit = np.stack([Dx, Dy, Dz], axis=-1).astype(np.float32)
+
+        # Precompute triangular faces for the sphere mesh
+        faces = []
+        for i in range(n_lat):
+            for j in range(n_lon):
+                jn = (j + 1) % n_lon
+                v00 = i * n_lon + j
+                v01 = i * n_lon + jn
+                v10 = (i + 1) * n_lon + j
+                v11 = (i + 1) * n_lon + jn
+                if i > 0:
+                    faces.append([v00, v10, v11])
+                if i < n_lat - 1:
+                    faces.append([v00, v11, v01])
+        self.faces = np.asarray(faces, dtype=np.int32)
+        self.f0 = self.faces[:, 0]
+        self.f1 = self.faces[:, 1]
+        self.f2 = self.faces[:, 2]
+
+        # Precompute rib indices for 0.001ms slicing
+        rib_pairs = []
+        for i in (3, 6, 9):
+            for j in range(n_lon):
+                rib_pairs.append((i * n_lon + j, i * n_lon + ((j + 1) % n_lon)))
+        for j in range(0, n_lon, max(1, n_lon // 4)):
+            for i in range(n_lat):
+                rib_pairs.append((i * n_lon + j, (i + 1) * n_lon + j))
+        self.rib_idx = np.asarray(rib_pairs, dtype=np.int32).reshape(-1)
+
+        # Fixed light direction for 3D normal shading
+        light_dir = np.array([0.45, -0.50, 0.75], dtype=np.float32)
+        self.light_dir = light_dir / np.linalg.norm(light_dir)
+
+    def compute_3d_isochrones(
+        self,
+        car_pos,
+        car_vel,
+        car_fwd,
+        car_up,
+        boost: float = 33.3,
+        is_on_ground: bool = True,
+    ):
+        """Computes 3D spatial isochrone bubbles for 1s, 2s, and 3s horizons.
+
+        Incorporates:
+        1. Gravity ballistic parabola (g = -650 uu/s^2) + ground jump launch velocity.
+        2. Dynamic boost acceleration (a_boost = 1060 uu/s^2) for burn duration tau = min(T, Boost / 33.3).
+        3. Aerial yaw/pitch orientation alignment latency (0.22s for 180-deg reversal).
+        4. Arena boundary and ground floor clipping.
+        5. Per-triangle normal shading & 3D curvature contour rib segments.
+        """
+        p0 = np.asarray(car_pos, dtype=np.float32)
+        v0 = np.asarray(car_vel, dtype=np.float32)
+        fwd = np.asarray(car_fwd, dtype=np.float32)
+        fn = float(np.linalg.norm(fwd))
+        fwd = fwd / fn if fn > 1e-4 else np.array([0.0, 1.0, 0.0], dtype=np.float32)
+
+        up = np.asarray(car_up, dtype=np.float32)
+        un = float(np.linalg.norm(up))
+        up = up / un if un > 1e-4 else np.array([0.0, 0.0, 1.0], dtype=np.float32)
+
+        g = np.array([0.0, 0.0, -650.0], dtype=np.float32)
+        # Fast Aerial jump launch impulse from ground
+        v_jump = 580.0 * up if is_on_ground else np.zeros(3, dtype=np.float32)
+        v_init = v0 + v_jump
+
+        horizons = (1.0, 2.0, 3.0)
+        base_colors = (
+            np.array([0.05, 0.95, 0.65, 0.20], dtype=np.float32),  # 1.0s: Spring Cyan
+            np.array([1.00, 0.82, 0.10, 0.15], dtype=np.float32),  # 2.0s: Warm Gold
+            np.array([1.00, 0.25, 0.62, 0.11], dtype=np.float32),  # 3.0s: Electric Rose
+        )
+
+        results = []
+        cos_alpha = np.sum(self.D_unit * fwd[None, None, :], axis=-1)
+        turn_factor = (1.0 - cos_alpha) * 0.5
+        t_turn = 0.22 * turn_factor  # Turn latency in air
+
+        boost_val = max(0.0, float(boost))
+        lx, ly, lz = float(self.light_dir[0]), float(self.light_dir[1]), float(self.light_dir[2])
+
+        for h_idx, T in enumerate(horizons):
+            t_burn = min(T, boost_val / 33.3)
+            c_b = p0 + v_init * T + 0.5 * g * (T ** 2)
+
+            # Effective thrust burn time accounting for turn latency
+            t_eff = np.maximum(0.0, t_burn - t_turn)
+
+            # Displacement from boost thrust: acceleration phase + coasting phase
+            s_thrust = 0.5 * 1060.0 * (t_eff ** 2) + 1060.0 * t_eff * (T - t_burn)
+            r_total = s_thrust + (75.0 + 35.0 * T)
+
+            grid_pts = c_b[None, None, :] + self.D_unit * r_total[:, :, None]
+
+            # Arena boundary & floor clipping
+            grid_pts[:, :, 2] = np.clip(grid_pts[:, :, 2], 17.0, 2035.0)
+            grid_pts[:, :, 0] = np.clip(grid_pts[:, :, 0], -4048.0, 4048.0)
+            grid_pts[:, :, 1] = np.clip(grid_pts[:, :, 1], -5072.0, 5072.0)
+
+            verts = grid_pts.reshape(-1, 3)
+
+            # Ultra-fast vectorized triangle face normals & lighting
+            e1 = verts[self.f1] - verts[self.f0]
+            e2 = verts[self.f2] - verts[self.f0]
+            nx = e1[:, 1] * e2[:, 2] - e1[:, 2] * e2[:, 1]
+            ny = e1[:, 2] * e2[:, 0] - e1[:, 0] * e2[:, 2]
+            nz = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]
+            inv_len = 1.0 / np.maximum(np.sqrt(nx * nx + ny * ny + nz * nz), 1e-6)
+            diff = np.clip((nx * lx + ny * ly + nz * lz) * inv_len, 0.0, 1.0)
+            hemi = 0.5 * (nz * inv_len + 1.0)
+            shade = 0.35 + 0.50 * diff + 0.15 * hemi
+
+            bc = base_colors[h_idx]
+            face_colors = np.zeros((len(self.faces), 4), dtype=np.float32)
+            face_colors[:, :3] = bc[:3] * shade[:, None]
+            face_colors[:, 3] = bc[3]
+
+            ribs = verts[self.rib_idx]
+
+            results.append({
+                "horizon": T,
+                "verts": verts,
+                "faces": self.faces,
+                "face_colors": face_colors,
+                "ribs": ribs,
+                "burn_sec": t_burn,
+            })
+
+        return results

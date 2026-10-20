@@ -250,6 +250,7 @@ class UIMixin:
         self.car_vel_arrow  = sc.VelocityArrowRenderer(self.view, color=(0.0, 1.0, 0.9, 0.95), width=4)
         self.ball_vel_arrow = sc.VelocityArrowRenderer(self.view, color=(1.0, 0.75, 0.1, 0.95), width=4)
         self.ground_iso     = sc.GroundIsochroneRenderer(self.view)
+        self.aerial_iso     = sc.AerialIsochroneRenderer(self.view)
         self.external_blob  = sc.IrregularSmoothBlobRenderer(self.view)
         left.addWidget(self.view, stretch=1)
 

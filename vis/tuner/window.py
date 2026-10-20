@@ -79,8 +79,10 @@ class RewardTuner(UIMixin, KeysMixin, ViewsMixin, RenderMixin, AutoMixin,
         self.session = Session(self.env, RewardConfig())
         self.session.plot_mode = self.plot_mode
         self.editor = ScenarioEditor(self.env)
-        from core.reachability import GroundReachabilityEngine
+        from core.reachability import GroundReachabilityEngine, AerialReachabilityEngine
         self.reach_engine = GroundReachabilityEngine(mode="model")
+        self.aerial_engine = AerialReachabilityEngine()
+        self.aerial_iso_mode = self._qsettings.value("aerial_iso_mode", "ALL", type=str)
         self.keys = {k: False for k in KEY_NAMES}
 
         self._build_ui()

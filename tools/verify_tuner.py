@@ -524,7 +524,22 @@ def verify_tuner_headless():
     assert hasattr(w, "external_blob") and hasattr(w, "ground_iso") and hasattr(w, "reach_engine")
     assert hasattr(w, "aerial_iso") and hasattr(w, "aerial_engine")
     assert w.reach_engine.mode == "model"
-    assert w.aerial_iso_mode == "ALL"
+    assert w.aerial_iso_mode == "FUNNEL"
+
+    # Verify 3D Funnel calculation
+    funnel_test = w.aerial_engine.compute_3d_funnel(
+        car_pos=(0, 0, 17),
+        car_vel=(0, 1000, 0),
+        car_fwd=(0, 1, 0),
+        car_up=(0, 0, 1),
+        boost=50.0,
+        is_on_ground=True,
+    )
+    assert len(funnel_test["verts"]) > 0
+    assert len(funnel_test["faces"]) > 0
+    assert len(funnel_test["rings"]) == 3
+    assert len(funnel_test["rails"]) > 0
+    w.aerial_iso.update_funnel(funnel_test)
 
     # Press 3 -> Free Camera mode (focused on external 3D blob, car input masked)
     w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_3))
@@ -549,15 +564,13 @@ def verify_tuner_headless():
     w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_K))
     assert w.reach_engine.mode == "model"
 
-    # Press L -> Cycle Aerial 3D Isochrone modes: ALL -> 1s+2s -> 1s -> OFF -> ALL
+    # Press L -> Cycle Aerial 3D modes: FUNNEL -> BUBBLES -> OFF -> FUNNEL
     w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_L))
-    assert w.aerial_iso_mode == "1s+2s"
-    w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_L))
-    assert w.aerial_iso_mode == "1s"
+    assert w.aerial_iso_mode == "BUBBLES"
     w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_L))
     assert w.aerial_iso_mode == "OFF"
     w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_L))
-    assert w.aerial_iso_mode == "ALL"
+    assert w.aerial_iso_mode == "FUNNEL"
 
     # Press 2 -> POV Camera, Press 1 -> Center Camera
     w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_2))

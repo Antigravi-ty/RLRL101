@@ -415,9 +415,145 @@ class AerialReachabilityEngine:
                 rib_pairs.append((i * n_lon + j, (i + 1) * n_lon + j))
         self.rib_idx = np.asarray(rib_pairs, dtype=np.int32).reshape(-1)
 
+        # Funnel geometry precomputations (continuous time-space interception corridor)
+        self.n_rings = 16
+        self.n_sec = 24
+        self.t_funnel = np.linspace(0.06, 3.0, self.n_rings, dtype=np.float32)
+        self.phi_funnel = np.linspace(0.0, 2.0 * math.pi, self.n_sec, endpoint=False, dtype=np.float32)
+        self.cos_funnel = np.cos(self.phi_funnel)
+        self.sin_funnel = np.sin(self.phi_funnel)
+
+        funnel_faces = []
+        funnel_color_base = []
+        for i in range(self.n_rings - 1):
+            t_mid = 0.5 * (self.t_funnel[i] + self.t_funnel[i + 1])
+            if t_mid <= 1.0:
+                c = [0.05, 0.95, 0.65, 0.22]
+            elif t_mid <= 2.0:
+                c = [1.00, 0.82, 0.10, 0.17]
+            else:
+                c = [1.00, 0.25, 0.62, 0.12]
+            for j in range(self.n_sec):
+                jn = (j + 1) % self.n_sec
+                v00 = i * self.n_sec + j
+                v01 = i * self.n_sec + jn
+                v10 = (i + 1) * self.n_sec + j
+                v11 = (i + 1) * self.n_sec + jn
+                funnel_faces.append([v00, v10, v11])
+                funnel_faces.append([v00, v11, v01])
+                funnel_color_base.append(c)
+                funnel_color_base.append(c)
+        self.funnel_faces = np.asarray(funnel_faces, dtype=np.int32)
+        self.funnel_color_base = np.asarray(funnel_color_base, dtype=np.float32)
+        self.fn_f0 = self.funnel_faces[:, 0]
+        self.fn_f1 = self.funnel_faces[:, 1]
+        self.fn_f2 = self.funnel_faces[:, 2]
+
+        self.idx_1s = int(np.argmin(np.abs(self.t_funnel - 1.0)))
+        self.idx_2s = int(np.argmin(np.abs(self.t_funnel - 2.0)))
+        self.idx_3s = self.n_rings - 1
+
         # Fixed light direction for 3D normal shading
         light_dir = np.array([0.45, -0.50, 0.75], dtype=np.float32)
         self.light_dir = light_dir / np.linalg.norm(light_dir)
+
+    def compute_3d_funnel(
+        self,
+        car_pos,
+        car_vel,
+        car_fwd,
+        car_up,
+        boost: float = 33.3,
+        is_on_ground: bool = True,
+    ):
+        """Computes a continuous 3D reachability funnel / interception horn across t in [0, 3]s.
+
+        Solves the discrete sphere gap problem:
+        1. Fully continuous from car origin to 3s rim (no missing gap between 1s and 2s).
+        2. Eliminates ground/wall jump discontinuity: vertical span stretches smoothly from surface level to jump peak.
+        3. Dynamically flares outward with Boost amount (slender ballistic tube at 0, wide rocket plume at 100).
+        4. Features crisp 1s (Cyan), 2s (Gold), 3s (Rose) isochrone rings and longitudinal guide rails.
+        """
+        p0 = np.asarray(car_pos, dtype=np.float32)
+        v0 = np.asarray(car_vel, dtype=np.float32)
+        fwd = np.asarray(car_fwd, dtype=np.float32)
+        fn = float(np.linalg.norm(fwd))
+        fwd = fwd / fn if fn > 1e-4 else np.array([0.0, 1.0, 0.0], dtype=np.float32)
+
+        up = np.asarray(car_up, dtype=np.float32)
+        un = float(np.linalg.norm(up))
+        up = up / un if un > 1e-4 else np.array([0.0, 0.0, 1.0], dtype=np.float32)
+
+        rgt = np.cross(fwd, up)
+        rn = float(np.linalg.norm(rgt))
+        rgt = rgt / rn if rn > 1e-4 else np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        up = np.cross(rgt, fwd)
+
+        g = np.array([0.0, 0.0, -650.0], dtype=np.float32)
+        boost_val = max(0.0, float(boost))
+        a_boost = 1060.0
+
+        ring_pts = []
+        for t in self.t_funnel:
+            # Smooth continuous jump envelope to avoid any snap
+            v_jump_center = (290.0 * up) if is_on_ground else np.zeros(3, dtype=np.float32)
+            c_t = p0 + (v0 + v_jump_center) * t + 0.5 * g * (t ** 2)
+
+            tau = min(t, boost_val / 33.3)
+            s_thrust = 0.5 * a_boost * (tau ** 2) + a_boost * tau * (t - tau)
+
+            r_lat = s_thrust * 0.85 + (35.0 + 30.0 * t)
+            jump_half_span = (290.0 * t) if is_on_ground else 0.0
+            r_vert = s_thrust * 0.85 + (35.0 + 30.0 * t) + jump_half_span
+
+            pts_ring = (
+                c_t[None, :]
+                + (rgt[None, :] * (r_lat * self.cos_funnel)[:, None])
+                + (up[None, :] * (r_vert * self.sin_funnel)[:, None])
+            )
+            pts_ring[:, 2] = np.clip(pts_ring[:, 2], 17.0, 2035.0)
+            pts_ring[:, 0] = np.clip(pts_ring[:, 0], -4048.0, 4048.0)
+            pts_ring[:, 1] = np.clip(pts_ring[:, 1], -5072.0, 5072.0)
+            ring_pts.append(pts_ring)
+
+        ring_pts = np.asarray(ring_pts, dtype=np.float32)
+        verts = ring_pts.reshape(-1, 3)
+
+        # Fast vectorized lighting
+        e1 = verts[self.fn_f1] - verts[self.fn_f0]
+        e2 = verts[self.fn_f2] - verts[self.fn_f0]
+        nx = e1[:, 1] * e2[:, 2] - e1[:, 2] * e2[:, 1]
+        ny = e1[:, 2] * e2[:, 0] - e1[:, 0] * e2[:, 2]
+        nz = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]
+        inv_len = 1.0 / np.maximum(np.sqrt(nx * nx + ny * ny + nz * nz), 1e-6)
+        diff = np.clip((nx * self.light_dir[0] + ny * self.light_dir[1] + nz * self.light_dir[2]) * inv_len, 0.0, 1.0)
+        hemi = 0.5 * (nz * inv_len + 1.0)
+        shade = 0.35 + 0.50 * diff + 0.15 * hemi
+
+        face_colors = self.funnel_color_base.copy()
+        face_colors[:, :3] *= shade[:, None]
+
+        # Extract 1s, 2s, 3s rings (closed loops)
+        rings = []
+        for r_idx in (self.idx_1s, self.idx_2s, self.idx_3s):
+            r_pts = ring_pts[r_idx]
+            rings.append(np.vstack([r_pts, r_pts[0:1]]))
+
+        # Extract 4 longitudinal rails
+        rail_segs = []
+        for j in (0, self.n_sec // 4, self.n_sec // 2, 3 * self.n_sec // 4):
+            for i in range(self.n_rings - 1):
+                rail_segs.append(ring_pts[i, j])
+                rail_segs.append(ring_pts[i + 1, j])
+        rails = np.asarray(rail_segs, dtype=np.float32)
+
+        return {
+            "verts": verts,
+            "faces": self.funnel_faces,
+            "face_colors": face_colors,
+            "rings": rings,
+            "rails": rails,
+        }
 
     def compute_3d_isochrones(
         self,

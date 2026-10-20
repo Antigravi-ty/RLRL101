@@ -105,8 +105,19 @@ class RenderMixin:
                 self.ground_iso.hide()
 
         if hasattr(self, "aerial_iso") and hasattr(self, "aerial_engine"):
-            a_mode = getattr(self, "aerial_iso_mode", "ALL")
-            if a_mode != "OFF":
+            a_mode = getattr(self, "aerial_iso_mode", "FUNNEL")
+            if a_mode == "FUNNEL":
+                up_tuple = snap.get("up", (float(cs.rot_mat.up.x), float(cs.rot_mat.up.y), float(cs.rot_mat.up.z)))
+                funnel = self.aerial_engine.compute_3d_funnel(
+                    car_pos=car_pos,
+                    car_vel=snap["car_vel"],
+                    car_fwd=snap["fwd"],
+                    car_up=up_tuple,
+                    boost=cur_boost,
+                    is_on_ground=bool(snap.get("on_ground", cs.is_on_ground)),
+                )
+                self.aerial_iso.update_funnel(funnel)
+            elif a_mode in ("BUBBLES", "ALL", "1s+2s", "1s"):
                 up_tuple = snap.get("up", (float(cs.rot_mat.up.x), float(cs.rot_mat.up.y), float(cs.rot_mat.up.z)))
                 bubbles = self.aerial_engine.compute_3d_isochrones(
                     car_pos=car_pos,
@@ -116,7 +127,8 @@ class RenderMixin:
                     boost=cur_boost,
                     is_on_ground=bool(snap.get("on_ground", cs.is_on_ground)),
                 )
-                self.aerial_iso.update(bubbles, mode=a_mode)
+                b_sub = "ALL" if a_mode == "BUBBLES" else a_mode
+                self.aerial_iso.update_bubbles(bubbles, mode=b_sub)
             else:
                 self.aerial_iso.hide()
 
@@ -197,8 +209,19 @@ class RenderMixin:
                 self.ground_iso.hide()
 
         if hasattr(self, "aerial_iso") and hasattr(self, "aerial_engine"):
-            a_mode = getattr(self, "aerial_iso_mode", "ALL")
-            if a_mode != "OFF":
+            a_mode = getattr(self, "aerial_iso_mode", "FUNNEL")
+            if a_mode == "FUNNEL":
+                up_tuple = fr.get("up", (0.0, 0.0, 1.0))
+                funnel = self.aerial_engine.compute_3d_funnel(
+                    car_pos=fr["car_pos"],
+                    car_vel=fr.get("car_vel", (0.0, 0.0, 0.0)),
+                    car_fwd=fr["fwd"],
+                    car_up=up_tuple,
+                    boost=float(fr.get("boost", 0.0)),
+                    is_on_ground=bool(fr.get("on_ground", True)),
+                )
+                self.aerial_iso.update_funnel(funnel)
+            elif a_mode in ("BUBBLES", "ALL", "1s+2s", "1s"):
                 up_tuple = fr.get("up", (0.0, 0.0, 1.0))
                 bubbles = self.aerial_engine.compute_3d_isochrones(
                     car_pos=fr["car_pos"],
@@ -208,7 +231,8 @@ class RenderMixin:
                     boost=float(fr.get("boost", 0.0)),
                     is_on_ground=bool(fr.get("on_ground", True)),
                 )
-                self.aerial_iso.update(bubbles, mode=a_mode)
+                b_sub = "ALL" if a_mode == "BUBBLES" else a_mode
+                self.aerial_iso.update_bubbles(bubbles, mode=b_sub)
             else:
                 self.aerial_iso.hide()
 

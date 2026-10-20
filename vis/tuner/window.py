@@ -82,7 +82,8 @@ class RewardTuner(UIMixin, KeysMixin, ViewsMixin, RenderMixin, AutoMixin,
         from core.reachability import GroundReachabilityEngine, AerialReachabilityEngine
         self.reach_engine = GroundReachabilityEngine(mode="model")
         self.aerial_engine = AerialReachabilityEngine()
-        self.aerial_iso_mode = self._qsettings.value("aerial_iso_mode", "ALL", type=str)
+        saved_aim = self._qsettings.value("aerial_iso_mode", "FUNNEL", type=str)
+        self.aerial_iso_mode = saved_aim if saved_aim in ("FUNNEL", "BUBBLES", "OFF") else "FUNNEL"
         self.keys = {k: False for k in KEY_NAMES}
 
         self._build_ui()

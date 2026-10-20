@@ -169,19 +169,18 @@ class KeysMixin:
             return
 
         if k == QtCore.Qt.Key_L:
-            modes = ["ALL", "1s+2s", "1s", "OFF"]
-            cur_m = getattr(self, "aerial_iso_mode", "ALL")
+            modes = ["FUNNEL", "BUBBLES", "OFF"]
+            cur_m = getattr(self, "aerial_iso_mode", "FUNNEL")
             next_idx = (modes.index(cur_m) + 1) % len(modes) if cur_m in modes else 0
             self.aerial_iso_mode = modes[next_idx]
             self._last_rendered_idx = None
             self._render()
             m_cn = {
-                "ALL": "ALL (1s/2s/3s 空间胞囊全开, Boost 动态伸缩)",
-                "1s+2s": "1s+2s (仅近程 1s 与 2s 空间胞囊)",
-                "1s": "1s (仅近程 1s 空间胞囊)",
-                "OFF": "OFF (关闭空中胞囊, 仅显示地面/表面等时线)",
+                "FUNNEL": "FUNNEL (三维时空喇叭锥体: 连续无断层拦截走廊 + 1s/2s/3s 环线 + 纵向导轨)",
+                "BUBBLES": "BUBBLES (1s/2s/3s 离散空间等时胞囊 + 经纬肋线)",
+                "OFF": "OFF (关闭空中 3D 锥体/胞囊, 仅保留地面/表面等时线)",
             }.get(self.aerial_iso_mode, self.aerial_iso_mode)
-            self._refresh_ui_state(f"空中 3D 可达性胞囊 = {m_cn}")
+            self._refresh_ui_state(f"空中 3D 可达性模式 = {m_cn}")
             return
 
         if k == QtCore.Qt.Key_B: self._toggle_ckpt_source(); return
@@ -244,7 +243,6 @@ class KeysMixin:
 
         if k == QtCore.Qt.Key_M: self._toggle_auto(); return
         if k == QtCore.Qt.Key_T: self._toggle_deterministic(); return
-        if k == QtCore.Qt.Key_L: self._toggle_auto_reset(); return
         if k == QtCore.Qt.Key_C: self._copy_hud(); return
         if k == QtCore.Qt.Key_R: self._reset_session(replay_last=True); return
 

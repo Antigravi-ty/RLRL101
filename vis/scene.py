@@ -324,7 +324,7 @@ class GroundIsochroneRenderer:
 
 
 class AerialIsochroneRenderer:
-    """Renders 1s, 2s, and 3s 3D aerial reachable bubbles (isochrones) with normal shading and contour rib lines."""
+    """Renders 1s/2s/3s continuous 3D reachability funnel / horn or discrete bubbles with normal lighting & rings."""
 
     COLORS_RIB = (
         (0.10, 1.00, 0.70, 0.85),  # 1.0s: Spring Cyan
@@ -353,20 +353,91 @@ class AerialIsochroneRenderer:
             view.addItem(rib)
             self.rib_lines.append(rib)
 
+        # Continuous 3D Funnel / Horn items
+        self.funnel_mesh = gl.GLMeshItem(
+            vertexes=np.zeros((3, 3), dtype=np.float32),
+            faces=np.zeros((1, 3), dtype=np.int32),
+            smooth=False,
+            drawEdges=False,
+            glOptions="translucent",
+        )
+        view.addItem(self.funnel_mesh)
+
+        self.funnel_ring_lines = []
+        for h in range(3):
+            ring_line = gl.GLLinePlotItem(antialias=True)
+            ring_line.setData(pos=np.zeros((0, 3), dtype=np.float32), color=self.COLORS_RIB[h], width=2.8 - 0.3 * h)
+            view.addItem(ring_line)
+            self.funnel_ring_lines.append(ring_line)
+
+        self.funnel_rail_line = gl.GLLinePlotItem(antialias=True)
+        self.funnel_rail_line.setData(pos=np.zeros((0, 3), dtype=np.float32), color=(0.85, 0.90, 0.95, 0.35), width=1.5, mode="lines")
+        view.addItem(self.funnel_rail_line)
+
         self.visible = True
 
-    def update(self, bubble_data_list, mode="ALL"):
+    def hide_funnel(self):
+        empty_v = np.zeros((3, 3), dtype=np.float32)
+        empty_f = np.zeros((0, 3), dtype=np.int32)
+        empty_p = np.zeros((0, 3), dtype=np.float32)
+        self.funnel_mesh.setMeshData(vertexes=empty_v, faces=empty_f)
+        for rl in self.funnel_ring_lines:
+            rl.setData(pos=empty_p)
+        self.funnel_rail_line.setData(pos=empty_p)
+
+    def hide_bubbles(self):
+        empty_v = np.zeros((3, 3), dtype=np.float32)
+        empty_f = np.zeros((0, 3), dtype=np.int32)
+        empty_p = np.zeros((0, 3), dtype=np.float32)
+        for h in range(3):
+            self.meshes[h].setMeshData(vertexes=empty_v, faces=empty_f)
+            self.rib_lines[h].setData(pos=empty_p)
+
+    def hide(self):
+        self.hide_bubbles()
+        self.hide_funnel()
+
+    def update_funnel(self, funnel_data):
+        if not self.visible or funnel_data is None:
+            self.hide()
+            return
+        self.hide_bubbles()
+
+        w_verts = funnel_data["verts"]
+        gl_verts = w_verts.copy()
+        gl_verts[:, 0] = -gl_verts[:, 0]
+        self.funnel_mesh.setMeshData(
+            vertexes=gl_verts,
+            faces=funnel_data["faces"],
+            faceColors=funnel_data["face_colors"],
+        )
+
+        for h, ring_w in enumerate(funnel_data.get("rings", [])):
+            if h < len(self.funnel_ring_lines):
+                gl_ring = ring_w.copy()
+                gl_ring[:, 0] = -gl_ring[:, 0]
+                self.funnel_ring_lines[h].setData(pos=gl_ring, color=self.COLORS_RIB[h], width=2.8 - 0.3 * h)
+
+        rails_w = funnel_data.get("rails")
+        if rails_w is not None and len(rails_w) > 0:
+            gl_rails = rails_w.copy()
+            gl_rails[:, 0] = -gl_rails[:, 0]
+            self.funnel_rail_line.setData(pos=gl_rails, color=(0.85, 0.90, 0.95, 0.35), width=1.5, mode="lines")
+        else:
+            self.funnel_rail_line.setData(pos=np.zeros((0, 3), dtype=np.float32))
+
+    def update_bubbles(self, bubble_data_list, mode="ALL"):
         if not self.visible or mode == "OFF" or not bubble_data_list:
             self.hide()
             return
+        self.hide_funnel()
 
-        active_indices = (0, 1, 2) if mode == "ALL" else ((0, 1) if mode == "1s+2s" else (0,))
+        active_indices = (0, 1, 2) if mode in ("ALL", "BUBBLES") else ((0, 1) if mode == "1s+2s" else (0,))
 
         for h in range(3):
             if h in active_indices and h < len(bubble_data_list):
                 bdata = bubble_data_list[h]
                 w_verts = bdata["verts"]
-                # Convert world coordinates to OpenGL: X -> -X
                 gl_verts = w_verts.copy()
                 gl_verts[:, 0] = -gl_verts[:, 0]
                 self.meshes[h].setMeshData(
@@ -385,13 +456,8 @@ class AerialIsochroneRenderer:
                 self.meshes[h].setMeshData(vertexes=empty_v, faces=empty_f)
                 self.rib_lines[h].setData(pos=np.zeros((0, 3), dtype=np.float32))
 
-    def hide(self):
-        empty_pos = np.zeros((0, 3), dtype=np.float32)
-        empty_v = np.zeros((3, 3), dtype=np.float32)
-        empty_f = np.zeros((0, 3), dtype=np.int32)
-        for h in range(3):
-            self.meshes[h].setMeshData(vertexes=empty_v, faces=empty_f)
-            self.rib_lines[h].setData(pos=empty_pos)
+    def update(self, bubble_data_list, mode="ALL"):
+        self.update_bubbles(bubble_data_list, mode=mode)
 
 
 class BallGuideLinesRenderer:

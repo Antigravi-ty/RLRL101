@@ -79,7 +79,7 @@ class RewardTuner(UIMixin, KeysMixin, ViewsMixin, RenderMixin, AutoMixin,
             nb, no = self.nexto_teams
             self.setWindowTitle(
                 f"Reward Tuner v10 — Nexto Live Match ({nb}v{no}) "
-                f"[R: Kickoff | 1-8/9/0: 选车 | V: 视角 | D/U: 轨迹时长 | G/\\: 开关图表]"
+                f"[R: 重置 | 1-8/9/0: 选车 | V: 视角 | U: 参数调整 | G: 开关图表]"
             )
         else:
             self.setWindowTitle("Reward Tuner v10 (Ground-Centric Static Ball Master + 3-Way Tab Editor)")
@@ -90,7 +90,8 @@ class RewardTuner(UIMixin, KeysMixin, ViewsMixin, RenderMixin, AutoMixin,
             from nexto import NextoMatchEnv
             from .nexto_session import NextoSession
             nb, no = self.nexto_teams
-            self.env = NextoMatchEnv(n_blue=nb, n_orange=no)
+            init_sp = spawn_dist or self._qsettings.value("nexto_spawn_spec", "kickoff", type=str)
+            self.env = NextoMatchEnv(n_blue=nb, n_orange=no, spawn_spec=init_sp)
             self.session = NextoSession(self.env, RewardConfig(), max_buffer_frames=self.trail_duration)
             self.session.plot_mode = self.plot_mode
             self.auto_session = self.session

@@ -108,8 +108,12 @@ class KeysMixin:
                 e.accept(); return
             e.accept(); return
 
-        if k == QtCore.Qt.Key_B: self._toggle_ckpt_source(); return
-        if k == QtCore.Qt.Key_G: self._cycle_ckpt_prefix(); return
+        if k == QtCore.Qt.Key_B:
+            if mods & QtCore.Qt.ShiftModifier:
+                self._cycle_ckpt_prefix()
+            else:
+                self._toggle_ckpt_source()
+            return
         if k == QtCore.Qt.Key_N:
             self._reset_session(replay_last=False)
             return
@@ -118,7 +122,7 @@ class KeysMixin:
             self._toggle_camera_mode()
             return
 
-        if k in (QtCore.Qt.Key_Y, QtCore.Qt.Key_H):
+        if k == QtCore.Qt.Key_Y:
             self._prompt_camera_params()
             return
 
@@ -136,12 +140,9 @@ class KeysMixin:
             self._toggle_freerun(); return
 
         if k == QtCore.Qt.Key_U:
-            self._prompt_spawn_dist(); return
+            self._prompt_tuning_params(); return
 
-        if k == QtCore.Qt.Key_F8 or (self.use_auto and k == QtCore.Qt.Key_D):
-            self._prompt_trail_duration(); return
-
-        if k in (QtCore.Qt.Key_Backslash, QtCore.Qt.Key_QuoteLeft, QtCore.Qt.Key_AsciiTilde, QtCore.Qt.Key_F9):
+        if k == QtCore.Qt.Key_G:
             self._toggle_plot_visibility(); return
 
         # Shift + 1..4: Quick-lock Phase 1..4; Shift+5: Speed-Flip; Shift+6: Half-Flip; Shift+7: Double-Jump; Shift+0: restore auto
@@ -225,38 +226,42 @@ class KeysMixin:
         super().keyPressEvent(e)
 
     def _handle_nexto_key_press(self, e, k, mods, sess):
-        """Nexto 多车实时对抗模式专用按键处理（消除了与单车控制/子曲线数字键的所有冲突）。"""
-        # 1. R / N: 随机标准 Kickoff Spawn 重置
-        if k in (QtCore.Qt.Key_R, QtCore.Qt.Key_N):
+        """Nexto 多车实时对抗模式专用按键处理：
+        - 严格保留手动控制键位接口 (W/A/S/D/Q/E/Shift 及右下角 ./> 与 //?)，绝不占用！
+        - 每个操作仅绑定单一清晰快捷键：U 调参数 (含轨迹时长 + 开球/随机重置 CS/BS/CG 分布)，G 开关图表。
+        """
+        # 0. 手动操作按键接口预留 (W/A/S/D/Q/E/Shift/./, 包括按住 Shift 时的 > 和 ?)
+        if k in KEY_MAP:
+            self.keys[KEY_MAP[k]] = True
+            e.accept(); return
+
+        # 1. R: 依据当前配置重置 (开球重置或随机重置)
+        if k == QtCore.Qt.Key_R:
             self._reset_session(replay_last=False)
             e.accept(); return
 
-        # 2. 轨迹持续时间弹窗 (D / U / F8) 与下方图表开关 (G / \ / ` / F9)
-        if k in (QtCore.Qt.Key_D, QtCore.Qt.Key_U, QtCore.Qt.Key_F8):
-            self._prompt_trail_duration()
+        # 2. U: 统一调参弹窗 (轨迹/图表持续时间 + 开球重置 vs 随机重置 CS[...]BS[...]CG[...])
+        if k == QtCore.Qt.Key_U:
+            self._prompt_tuning_params()
             e.accept(); return
-        if k in (
-            QtCore.Qt.Key_G,
-            QtCore.Qt.Key_Backslash,
-            QtCore.Qt.Key_QuoteLeft,
-            QtCore.Qt.Key_AsciiTilde,
-            QtCore.Qt.Key_F9,
-        ):
+
+        # 3. G: 统一开关下方图表
+        if k == QtCore.Qt.Key_G:
             self._toggle_plot_visibility()
             e.accept(); return
 
-        # 3. 相机控制: V (切换 CENTER / POV), Space (切换 POV 子模式 ATTACH / BALL-CAM), Y/H (参数微调)
+        # 4. 相机控制: V (切换 CENTER / POV), Space (切换 POV 子模式 ATTACH / BALL-CAM), Y (参数微调)
         if k == QtCore.Qt.Key_V:
             self._toggle_camera_mode()
             e.accept(); return
         if k == QtCore.Qt.Key_Space:
             self._toggle_pov_submode()
             e.accept(); return
-        if k in (QtCore.Qt.Key_Y, QtCore.Qt.Key_H):
+        if k == QtCore.Qt.Key_Y:
             self._prompt_camera_params()
             e.accept(); return
 
-        # 4. 视图/差分/曲线切换: O (切换 RWD/OBS/FLG), P (一阶差分), Tab / F1..F7 / Alt+1..7 (切换子曲线/Obs组)
+        # 5. 视图/差分/子曲线切换: O (切换 RWD/OBS/FLG), P (一阶差分), Tab (切换子曲线/Obs组)
         if k == QtCore.Qt.Key_O:
             self._cycle_view_mode()
             e.accept(); return
@@ -267,23 +272,9 @@ class KeysMixin:
             delta = -1 if (k == QtCore.Qt.Key_Backtab or (mods & QtCore.Qt.ShiftModifier)) else 1
             self._cycle_sub_curve_or_obs_group(delta)
             e.accept(); return
-        if QtCore.Qt.Key_F1 <= k <= QtCore.Qt.Key_F7:
-            idx = k - QtCore.Qt.Key_F1
-            if self.view_mode == "obs":
-                self._set_obs_group(idx)
-            elif self.view_mode == "reward" and idx < 6:
-                self._set_plot_mode(idx + 1)
-            e.accept(); return
-        if (mods & (QtCore.Qt.AltModifier | QtCore.Qt.ControlModifier)) and (QtCore.Qt.Key_1 <= k <= QtCore.Qt.Key_7):
-            idx = k - QtCore.Qt.Key_1
-            if self.view_mode == "obs":
-                self._set_obs_group(idx)
-            elif self.view_mode == "reward" and idx < 6:
-                self._set_plot_mode(idx + 1)
-            e.accept(); return
 
-        # 5. 车辆选择与切换 (支持主键盘与小键盘 Numpad):
-        #    1..8: 选择第 1..8 辆车 (超出当前车辆总数时自动落到最后一辆车，如 1v1 按 7 -> 第 2 辆车)
+        # 6. 车辆选择与切换 (支持主键盘与小键盘 Numpad):
+        #    1..8: 选择第 1..8 辆车 (超出当前车辆总数时自动落到最后一辆车)
         #    9   : 切换上一辆车
         #    0   : 切换下一辆车
         non_keypad_mods = mods & ~(QtCore.Qt.KeypadModifier)
@@ -298,7 +289,7 @@ class KeysMixin:
                 self._cycle_nexto_car(+1)
                 e.accept(); return
 
-        # 6. 倍速、推理模式 (DET/STOCH)、进球重置开关、复制 HUD、导出帧
+        # 7. 倍速 (- / =)、推理模式 (T)、进球重置开关 (L)、复制 HUD (C)、导出帧 (Enter)
         if k == QtCore.Qt.Key_Minus:
             self._adjust_speed(-SPEED_STEP); e.accept(); return
         if k in (QtCore.Qt.Key_Equal, QtCore.Qt.Key_Plus):
@@ -317,8 +308,8 @@ class KeysMixin:
                 self._refresh_ui_state(f"已保存: {os.path.basename(fn)}")
             e.accept(); return
 
-        # 7. 暂停 / 历史帧回放与逐帧步进 (J / ' 切换 LIVE <-> PAUSE <-> PLAYBACK)
-        if k in (QtCore.Qt.Key_J, QtCore.Qt.Key_Apostrophe):
+        # 8. 暂停 / 历史帧回放与逐帧步进 (J 切换 LIVE <-> PAUSE <-> PLAYBACK)
+        if k == QtCore.Qt.Key_J:
             sess.toggle_playback()
             self._update_plots_from_frames(sess)
             self._last_rendered_idx = None
@@ -339,9 +330,11 @@ class KeysMixin:
         e.accept()
 
     def keyReleaseEvent(self, e):
-        if getattr(self, "is_nexto_mode", False):
-            e.accept(); return
         k = e.key()
+        if getattr(self, "is_nexto_mode", False):
+            if k in KEY_MAP:
+                self.keys[KEY_MAP[k]] = False
+            e.accept(); return
         if getattr(self, "editor", None) is not None and self.editor.active:
             if not e.isAutoRepeat() and k in _EDIT_HOLD_MAP:
                 self.editor._held.discard(_EDIT_HOLD_MAP[k])
@@ -349,4 +342,3 @@ class KeysMixin:
         if k in KEY_MAP:
             self.keys[KEY_MAP[k]] = False
         super().keyReleaseEvent(e)
-

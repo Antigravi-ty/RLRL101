@@ -52,7 +52,8 @@ def _fmt_focus(session):
         no = getattr(env, "n_orange", 0)
         sb = getattr(env, "score_blue", 0)
         so = getattr(env, "score_orange", 0)
-        return f"[NEXTO {nb}v{no} | SCORE {sb}:{so} | 视角车 {lbl} ({f_idx}/{n_cars})]\n"
+        sp_raw = env.spawn_cfg.get("raw", "kickoff") if hasattr(env, "spawn_cfg") else "kickoff"
+        return f"[NEXTO {nb}v{no} | SCORE {sb}:{so} | 视角车 {lbl} ({f_idx}/{n_cars}) | {sp_raw}]\n"
     from core.env import STAGE_SHORT_LABELS
     s_idx = getattr(env, "current_stage_idx", 0)
     s_lbl = STAGE_SHORT_LABELS[s_idx] if 0 <= s_idx < len(STAGE_SHORT_LABELS) else f"P{s_idx+1}"

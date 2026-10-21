@@ -202,6 +202,8 @@ def _install_headless_qt_mocks():
 
     class _AutoMockModule(types.ModuleType):
         def __getattr__(self, name):
+            if name.startswith("__") and name.endswith("__"):
+                raise AttributeError(name)
             setattr(self, name, _DummyWidget)
             return _DummyWidget
 
@@ -302,8 +304,12 @@ def _install_headless_qt_mocks():
         Key_Enter = 13
         Key_Escape = 27
         Key_Period = 46
+        Key_Greater = 62
         Key_Comma = 44
         Key_Slash = 47
+        Key_Question = 63
+        Key_U = 85
+        Key_G = 71
         Key_BracketLeft = 91
         Key_BracketRight = 93
         Key_Minus = 45
@@ -677,12 +683,75 @@ def verify_tuner_headless():
     w_nexto.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_G))
     assert w_nexto.plot_visible is True and w_nexto.plot_widget.isVisible() is True
 
+    # 13. Verify _on_goal callback with keyword `team=0` / `team=1` (no TypeError: missing scoring_team)
+    prev_blue = w_nexto.env.blue_score
+    bs_goal = w_nexto.env.arena.ball.get_state()
+    bs_goal.pos = rs.Vec(0.0, 5210.0, 100.0)
+    bs_goal.vel = rs.Vec(0.0, 1200.0, 0.0)
+    w_nexto.env.arena.ball.set_state(bs_goal)
+    w_nexto.auto_session._step_once()
+    assert w_nexto.env.blue_score == prev_blue + 1, f"Expected blue_score to increment on goal, got {w_nexto.env.blue_score}"
+
+    # 14. Verify manual control keys W/A/S/D/Q/E/Shift and Period/Greater (./>) & Slash/Question (//?) in Nexto mode
+    #     Ensure D does NOT open a dialog and Shift + ./> or //? properly updates self.keys["Period"] / self.keys["Slash"]
+    w_nexto.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_D))
+    assert w_nexto.keys["D"] is True
+    w_nexto.keyReleaseEvent(_FakeKeyEvent(QtCore.Qt.Key_D))
+    assert w_nexto.keys["D"] is False
+
+    w_nexto.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_Shift, mods=QtCore.Qt.ShiftModifier))
+    w_nexto.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_Greater, mods=QtCore.Qt.ShiftModifier))
+    w_nexto.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_Question, mods=QtCore.Qt.ShiftModifier))
+    assert w_nexto.keys["Shift"] is True
+    assert w_nexto.keys["Period"] is True, "Shift + . (Key_Greater) must map to Period (Boost)"
+    assert w_nexto.keys["Slash"] is True, "Shift + / (Key_Question) must map to Slash (Jump)"
+    w_nexto.keyReleaseEvent(_FakeKeyEvent(QtCore.Qt.Key_Greater, mods=QtCore.Qt.ShiftModifier))
+    w_nexto.keyReleaseEvent(_FakeKeyEvent(QtCore.Qt.Key_Question, mods=QtCore.Qt.ShiftModifier))
+    w_nexto.keyReleaseEvent(_FakeKeyEvent(QtCore.Qt.Key_Shift))
+    assert w_nexto.keys["Period"] is False and w_nexto.keys["Slash"] is False and w_nexto.keys["Shift"] is False
+
+    # 15. Verify Nexto [U] NextoTuningDialog & CS[...]BS[...]CG[...] real-time validation and random reset
+    from nexto import parse_nexto_spawn_spec
+    from vis.tuner.window_views import NextoTuningDialog
+    ok_ko, cfg_ko, _ = parse_nexto_spawn_spec("kickoff")
+    assert ok_ko and cfg_ko["mode"] == "kickoff"
+    ok_rnd, cfg_rnd, msg_rnd = parse_nexto_spawn_spec("CS[00001]BS[100002]CG[7]")
+    assert ok_rnd and cfg_rnd["mode"] == "random", f"Expected valid CS[00001]BS[100002]CG[7], got {msg_rnd}"
+    assert cfg_rnd["cs_weights"] == [0, 0, 0, 0, 1]
+    assert cfg_rnd["bs_weights"] == [1, 0, 0, 0, 0, 2]
+    assert abs(cfg_rnd["cg_prob"] - 0.70) < 1e-6
+
+    # Invalid cases must be rejected by real-time validator
+    for bad_spec in ("CS[001]BS[100002]CG[7]", "CS[00000]BS[100002]CG[7]", "CS[00001]BS[12]CG[7]", "CS[00001]BS[100002]CG[15]", "foo"):
+        ok_bad, _, _ = parse_nexto_spawn_spec(bad_spec)
+        assert not ok_bad, f"Expected {bad_spec} to fail validation"
+
+    dlg_u = NextoTuningDialog(w_nexto, current_frames=100, current_spawn_spec="kickoff")
+    dlg_u.dur_edit.setText("180")
+    dlg_u.spawn_edit.setText("CS[00001]BS[100002]CG[7]")
+    assert dlg_u.frames_value() == 180
+    assert dlg_u.spawn_spec_value() == "CS[00001]BS[100002]CG[7]"
+
+    w_nexto._set_nexto_spawn_spec("CS[00001]BS[100002]CG[7]", reset_now=True)
+    assert w_nexto.env.spawn_cfg["mode"] == "random"
+    # With CS[00001], every car initial speed must be in bin 4: [1950, 2300]
+    for c_obj in w_nexto.env.cars:
+        cs_v = c_obj.get_state().vel
+        spd_c = (float(cs_v.x) ** 2 + float(cs_v.y) ** 2 + float(cs_v.z) ** 2) ** 0.5
+        assert 1945.0 <= spd_c <= 2305.0, f"Expected car speed in [1950, 2300] for CS[00001], got {spd_c}"
+
+    # With BS[100002], ball initial speed must be either in bin 0 [0, 150] or bin 5 [3100, 4200]
+    bs_v = w_nexto.env.arena.ball.get_state().vel
+    spd_b = (float(bs_v.x) ** 2 + float(bs_v.y) ** 2 + float(bs_v.z) ** 2) ** 0.5
+    assert (0.0 <= spd_b <= 155.0) or (3095.0 <= spd_b <= 4205.0), f"Unexpected ball speed {spd_b} for BS[100002]"
+
     print(
         f"[verify_tuner] ALL OK! Verified RewardTuner startup, {NUM_CURRICULUM_STEPS} curriculum steps, "
         f"HUD formatting, recording/playback/freerun, plot/obs/flags panels, 3-way Tab ScenarioEditor, "
         f"[Z] Boost/HasJump panel, 3D POV Ball-Cam, SpeedFlip/HalfFlip/DJump presets, MANUAL-RESET instant trajectory on N + replay on R, "
         f"TrailRenderer synchronized jump/djump expiration, Nexto (--nexto 6 2 & 1 1) multi-car combat, "
-        f"RocketSim keyword callbacks, dynamic graph X-axis tracking, [D/U] trail duration resizing (600->100), and [G/\\] graph visibility toggle."
+        f"RocketSim keyword callbacks (touch/boost/goal), reserved manual keys (WASD/QE/Shift/./> and //?), "
+        f"[U] unified tuning dialog (trail duration + kickoff vs CS[...]BS[...]CG[...] random spawn), and [G] graph toggle."
     )
 
 

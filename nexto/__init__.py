@@ -1,7 +1,7 @@
 """nexto —— 独立解耦的 Nexto 多车推理、观测构建与标准开球实时对抗环境包。"""
 from .model import NextoAgent, action_8d_to_car_controls, action_8d_to_input_dict
 from .obs import NextoObsBuilder
-from .env import NextoMatchEnv
+from .env import NextoMatchEnv, parse_nexto_spawn_spec, NEXTO_CS_BINS, NEXTO_BS_BINS, DEFAULT_NEXTO_RANDOM_SPEC
 
 
 def parse_nexto_teams(val):
@@ -38,6 +38,10 @@ __all__ = [
     "NextoAgent",
     "NextoObsBuilder",
     "NextoMatchEnv",
+    "parse_nexto_spawn_spec",
+    "NEXTO_CS_BINS",
+    "NEXTO_BS_BINS",
+    "DEFAULT_NEXTO_RANDOM_SPEC",
     "action_8d_to_car_controls",
     "action_8d_to_input_dict",
     "parse_nexto_teams",

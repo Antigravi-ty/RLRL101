@@ -246,6 +246,135 @@ class TrailDurationDialog(_QT_BASE_DIALOG):
         return frames if ok else 600
 
 
+class NextoTuningDialog(_QT_BASE_DIALOG):
+    """统一调参弹窗 [U]:
+    1) 调整轨迹与下方图表持续时间 (如 600 -> 100 帧)
+    2) 选择重置方式: 开球重置 (kickoff) vs 随机重置 (random)，并实时检测 CS[5位]BS[6位]CG[0-10] 编码合法性。
+    """
+
+    def __init__(self, parent, current_frames: int = 600, current_spawn_spec: str = "kickoff"):
+        super().__init__(parent)
+        from nexto.env import parse_nexto_spawn_spec, DEFAULT_NEXTO_RANDOM_SPEC
+        self._parse_spawn = parse_nexto_spawn_spec
+        self._default_rnd = DEFAULT_NEXTO_RANDOM_SPEC
+
+        self.setWindowTitle("参数调整 [U] — 轨迹/图表时长 & 重置模式 (Kickoff / Random CS·BS·CG)")
+        self.setMinimumWidth(720)
+        self.setStyleSheet("QDialog { background-color: #f5f5f5; color: #000000; }")
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # ---- Part 1: Trail & Graph Duration ----
+        dur_title = QtWidgets.QLabel("【1】3D 车辆轨迹 & 下方图表滚动窗口持续时间 (帧数 @ 120Hz 或带 s 秒数):")
+        dur_title.setStyleSheet("font-family:Consolas;font-size:13px;font-weight:bold;color:#000000;")
+        layout.addWidget(dur_title)
+
+        self.dur_edit = QtWidgets.QLineEdit(str(int(current_frames)))
+        self.dur_edit.setStyleSheet(
+            "font-family:Consolas;font-size:14px;font-weight:bold;"
+            "color:#000000;background-color:#ffffff;border:1px solid #888888;padding:6px;"
+        )
+        layout.addWidget(self.dur_edit)
+
+        self.dur_status_lbl = QtWidgets.QLabel("")
+        self.dur_status_lbl.setStyleSheet("font-family:Consolas;font-size:12px;font-weight:bold;padding:2px;")
+        layout.addWidget(self.dur_status_lbl)
+
+        dur_preset_row = QtWidgets.QHBoxLayout()
+        for title, val in [
+            ("60帧 (0.5s)", "60"),
+            ("100帧 (0.8s)", "100"),
+            ("180帧 (1.5s)", "180"),
+            ("300帧 (2.5s)", "300"),
+            ("600帧 (5.0s 默认)", "600"),
+            ("1200帧 (10.0s)", "1200"),
+        ]:
+            btn = QtWidgets.QPushButton(title)
+            btn.setStyleSheet("color:#000000;font-weight:bold;padding:4px 8px;")
+            btn.clicked.connect(lambda _=False, v=val: self.dur_edit.setText(v))
+            dur_preset_row.addWidget(btn)
+        layout.addLayout(dur_preset_row)
+
+        # ---- Part 2: Reset Mode & Random Spawn CS[...]BS[...]CG[...] ----
+        sp_title = QtWidgets.QLabel(
+            "\n【2】重置方式选择 & 随机重置速度/地面概率分布编码 (实时合法性检测):\n"
+            "• 开球重置: 输入 kickoff (5个标准开球位随机排列，球居中静止)\n"
+            "• 随机重置编码: CS[c0 c1 c2 c3 c4] BS[b0 b1 b2 b3 b4 b5] CG[0..10]\n"
+            "  - CS[5位数字]: 车辆初速 5 档权重 [0:静止0-150, 1:低速150-700, 2:中速700-1400, 3:高速1400-1950, 4:超音速1950-2300]\n"
+            "    例: CS[00001] = 每次刷新 100% 为最高档超音速；CS[12211] = 全速域均衡分布\n"
+            "  - BS[6位数字]: 球初速 6 档权重 [0:超低0-150, 1:低速150-700, 2:中低700-1400, 3:中高1400-2200, 4:高速2200-3100, 5:超高3100-4200]\n"
+            "    例: BS[100002] = 每生成 3 次，有 1 次是超低速、2 次是超高速\n"
+            "  - CG[0..10]  : 车辆在地面 (On-Ground) 的概率 = 数字 × 10% (例: CG[7] = 70% 在地面，30% 在空中)"
+        )
+        sp_title.setStyleSheet("font-family:Consolas;font-size:12px;color:#000000;background:transparent;")
+        layout.addWidget(sp_title)
+
+        init_sp = (current_spawn_spec or "kickoff").strip()
+        self.spawn_edit = QtWidgets.QLineEdit(init_sp)
+        self.spawn_edit.setStyleSheet(
+            "font-family:Consolas;font-size:14px;font-weight:bold;"
+            "color:#000000;background-color:#ffffff;border:1px solid #888888;padding:6px;"
+        )
+        layout.addWidget(self.spawn_edit)
+
+        self.spawn_status_lbl = QtWidgets.QLabel("")
+        self.spawn_status_lbl.setStyleSheet("font-family:Consolas;font-size:12px;font-weight:bold;padding:2px;")
+        layout.addWidget(self.spawn_status_lbl)
+
+        sp_preset_row = QtWidgets.QHBoxLayout()
+        for title, val in [
+            ("⚽ 标准开球 (kickoff)", "kickoff"),
+            ("🎲 均衡随机 (默认)", DEFAULT_NEXTO_RANDOM_SPEC),
+            ("🔥 极速车+两极球 (CS[00001]BS[100002]CG[7])", "CS[00001]BS[100002]CG[7]"),
+            ("✈️ 空战高球 (CS[01221]BS[012210]CG[3])", "CS[01221]BS[012210]CG[3]"),
+            ("🏎️ 纯地面拼抢 (CS[12210]BS[222000]CG[10])", "CS[12210]BS[222000]CG[10]"),
+        ]:
+            btn = QtWidgets.QPushButton(title)
+            btn.setStyleSheet("color:#000000;font-weight:bold;padding:4px 8px;")
+            btn.clicked.connect(lambda _=False, v=val: self.spawn_edit.setText(v))
+            sp_preset_row.addWidget(btn)
+        layout.addLayout(sp_preset_row)
+
+        self.btn_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        self.btn_box.accepted.connect(self.accept)
+        self.btn_box.rejected.connect(self.reject)
+        layout.addWidget(self.btn_box)
+
+        self.dur_edit.textChanged.connect(self._validate_all)
+        self.spawn_edit.textChanged.connect(self._validate_all)
+        self._validate_all()
+
+    def _validate_all(self, *_):
+        ok_dur, _, msg_dur = parse_trail_duration_spec(self.dur_edit.text())
+        self.dur_status_lbl.setText(msg_dur)
+        self.dur_status_lbl.setStyleSheet(
+            f"color:{'#007a1c' if ok_dur else '#d92626'};font-family:Consolas;font-size:12px;font-weight:bold;padding:2px;"
+        )
+
+        ok_sp, _, msg_sp = self._parse_spawn(self.spawn_edit.text())
+        self.spawn_status_lbl.setText(msg_sp)
+        self.spawn_status_lbl.setStyleSheet(
+            f"color:{'#007a1c' if ok_sp else '#d92626'};font-family:Consolas;font-size:12px;font-weight:bold;padding:2px;"
+        )
+
+        ok_btn = self.btn_box.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+        if ok_btn is not None:
+            ok_btn.setEnabled(bool(ok_dur and ok_sp))
+
+    def frames_value(self) -> int:
+        ok, frames, _ = parse_trail_duration_spec(self.dur_edit.text())
+        return frames if ok else 600
+
+    def spawn_spec_value(self) -> str:
+        ok, cfg, _ = self._parse_spawn(self.spawn_edit.text())
+        if ok and cfg is not None:
+            return cfg["raw"]
+        return "kickoff"
+
+
+
 class ViewsMixin:
     def _save_prefs(self):
         if not hasattr(self, "_qsettings"):
@@ -295,6 +424,40 @@ class ViewsMixin:
         if dlg.exec_() == QtWidgets.QDialog.DialogCode.Accepted:
             self._set_trail_duration(dlg.frames_value())
 
+    def _set_nexto_spawn_spec(self, spec: str, reset_now: bool = True):
+        if not hasattr(self.env, "set_spawn_spec"):
+            return False
+        prev_raw = self.env.spawn_cfg.get("raw", "kickoff") if hasattr(self.env, "spawn_cfg") else "kickoff"
+        ok, msg = self.env.set_spawn_spec(spec, reset_now=False)
+        if not ok:
+            self._refresh_ui_state(msg)
+            return False
+        new_raw = self.env.spawn_cfg.get("raw", "kickoff")
+        if hasattr(self, "_qsettings"):
+            self._qsettings.setValue("nexto_spawn_spec", new_raw)
+        if reset_now or (new_raw != prev_raw):
+            self._reset_session(replay_last=False)
+        self._refresh_ui_state(msg)
+        return True
+
+    def _prompt_tuning_params(self):
+        """统一调参入口 [U]:
+        Nexto 模式下打开 NextoTuningDialog (同时包含轨迹时长 + 开球/随机重置 CS[...]BS[...]CG[...] 配置)；
+        单车模式下打开 SpawnDistDialog。
+        """
+        if getattr(self, "is_nexto_mode", False):
+            cur_dur = int(getattr(self, "trail_duration", 600))
+            cur_sp = self.env.spawn_cfg.get("raw", "kickoff") if hasattr(self.env, "spawn_cfg") else "kickoff"
+            dlg = NextoTuningDialog(self, current_frames=cur_dur, current_spawn_spec=cur_sp)
+            if dlg.exec_() == QtWidgets.QDialog.DialogCode.Accepted:
+                new_dur = dlg.frames_value()
+                new_sp = dlg.spawn_spec_value()
+                if new_dur != cur_dur:
+                    self._set_trail_duration(new_dur)
+                self._set_nexto_spawn_spec(new_sp, reset_now=(new_sp != cur_sp))
+        else:
+            self._prompt_spawn_dist()
+
     def _toggle_plot_visibility(self):
         """一键关闭/展开下方图表 (plot_widget)，将垂直空间释放给 3D 球场视野。"""
         new_vis = not bool(getattr(self, "plot_visible", True))
@@ -306,8 +469,8 @@ class ViewsMixin:
         self.setFocus()
         self._save_prefs()
         msg = (
-            "📊 下方图表已展开 (按 G 或 \\ 关闭图表以扩大球场视野)"
-            if new_vis else "📊 下方图表已关闭，3D 球场视野已最大化 (按 G 或 \\ 恢复图表)"
+            "📊 下方图表已展开 (按 G 关闭图表以扩大球场视野)"
+            if new_vis else "📊 下方图表已关闭，3D 球场视野已最大化 (按 G 恢复图表)"
         )
         self._refresh_ui_state(msg)
 
@@ -615,7 +778,8 @@ class ViewsMixin:
             self.auto_session.begin_recording(replay_last=replay_last)
             self._last_rendered_idx = None
             self._render()
-            msg = "重放当前 Kickoff (Shift+R)" if replay_last else "随机标准 Kickoff 重置 (R)"
+            sp_raw = self.env.spawn_cfg.get("raw", "kickoff") if hasattr(self.env, "spawn_cfg") else "kickoff"
+            msg = f"随机状态重置 [{sp_raw}] (R)" if sp_raw != "kickoff" else "随机标准 Kickoff 重置 (R)"
             self._refresh_ui_state(msg)
             return
 
@@ -659,6 +823,7 @@ class ViewsMixin:
 
     def _apply_spawn_dist_str(self, spec: str):
         if getattr(self, "is_nexto_mode", False):
+            self._set_nexto_spawn_spec(spec, reset_now=True)
             return
         clean = (spec or "").strip()
         if clean.lower() in ("off", "none", "auto", "default"):
@@ -778,9 +943,10 @@ class ViewsMixin:
         if getattr(self, "is_nexto_mode", False):
             det_tag = "DET" if getattr(self.auto_session, "deterministic", True) else "STOCH"
             car_lbl = self.env.car_label() if hasattr(self.env, "car_label") else "#1"
+            sp_raw = self.env.spawn_cfg.get("raw", "kickoff") if hasattr(self.env, "spawn_cfg") else "kickoff"
             self.mode_indicator.setText(
                 f"NEXTO {self.env.n_blue}v{self.env.n_orange}({det_tag}) "
-                f"[SCORE {self.env.score_blue}:{self.env.score_orange} | {car_lbl} ({self.env.focused_car_idx+1}/{self.env.n_cars}) | CAM:{cam_tag}]"
+                f"[SCORE {self.env.score_blue}:{self.env.score_orange} | {car_lbl} ({self.env.focused_car_idx+1}/{self.env.n_cars}) | {sp_raw} | CAM:{cam_tag}]"
             )
             self.mode_indicator.setStyleSheet(
                 "color:#0ff;font-size:15px;font-weight:bold;"

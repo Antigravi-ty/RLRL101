@@ -335,22 +335,21 @@ class UIMixin:
 
         if getattr(self, "is_nexto_mode", False):
             help_txt = (
-                "Nexto 实时对抗: 全车由 Nexto 模型接管  |  R (或 N): 随机标准 Kickoff Spawn 开球重置\n"
-                "车辆切换(支持主键盘与小键盘): 1-8 选择第 1-8 辆车 (超出总车数自动切换到最后一辆车)  |  9: 上一辆车  |  0: 下一辆车\n"
-                "相机视角: 默认聚焦场地中心 (CENTER)  |  V: 切 CENTER ↔ POV(跟随当前选中车)  |  Space(POV下): 切 HARD-ATTACH ↔ BALL-CAM\n"
-                "推理/速率: T 切换 DET(最优) ↔ STOCH(采样)  |  - / = 调节速度  |  J(或 ') 暂停/回放  |  ←→ / [/] / I/K 逐帧查看\n"
-                "轨迹与图表控制: D (或 U / F8) 弹窗修改轨迹与下方图表持续时间(如 600→100帧)  |  G (或 \\ / F9) 关闭/展开下方图表扩大视野\n"
-                "视图/曲线(无数字键冲突): O 切换 REWARD→OBS→FLAGS  |  Tab(或 Alt+1-7 / F1-F7) 切换子曲线/观测组  |  P 切 DELTA  |  C 复制HUD"
+                "Nexto 实时对抗: 全车由 Nexto 接管 (手动键 WASD/QE/Shift/./ 接口已完整保留，含按住Shift时 > 和 ? 映射)\n"
+                "重置与参数 [U]: R 重置对局  |  U 弹窗调参 (修改轨迹/图表帧数 + 切换 kickoff 开球重置 或 CS[..]BS[..]CG[..] 随机重置)\n"
+                "车辆切换(主键盘/小键盘): 1-8 选择第 1-8 辆车 (超出总车数自动切到最后一辆)  |  9: 上一辆车  |  0: 下一辆车\n"
+                "相机视角: 默认聚焦中心 (CENTER)  |  V: 切 CENTER ↔ POV(跟随选中车)  |  Space(POV下): 切 ATTACH ↔ BALL-CAM  |  Y: 相机参数\n"
+                "推理/回放: T 切 DET/STOCH  |  L 进球自动重置  |  - / = 调速  |  J 暂停/回放  |  ←→ / [/] / I/K 逐帧查看\n"
+                "图表与视图: G 关闭/展开下方图表  |  O 切换 REWARD→OBS→FLAGS  |  Tab 切换子曲线/观测组  |  P 切 DELTA  |  C 复制HUD"
             )
         else:
             help_txt = (
                 "录制: WASD  /(jump)  .(boost)  Shift(slide)  Q/E(roll)  |  X: 手动摆靶/摆车/发球  |  Z: 展开Boost/HasJump面板\n"
                 "编辑(X下): Tab切 [车头方向 / init速度方向 / 手动发球(聚焦于球)]  WASD平移  /.高度  左键拖方向  [/]调速  T发射\n"
-                "回放: ←→(±1)  [ ](±30)  I/K(±60)  ,( -10)  ;(+10)  J 或 ' 播放/暂停\n"
-                "速度: - / =   R 逐步重放同场景   N 新场景(MANUAL-RESET下直接画出完整轨迹)   M 切 HUMAN/MODEL   T 切 DET/STOCH   L 切 auto-reset\n"
-                "相机: V 切 THIRD-PARTY/POV  |  Space(POV下) 切 HARD-ATTACH ↔ BALL-CAM(3D俯仰聚焦球)  |  Y(或H) 改相机参数\n"
-                "轨迹与图表: F8(或MODEL下按D) 弹窗修改轨迹/图表持续时间(如 600→100)  |  \\ (或F9) 关闭/展开下方图表扩大场地视野\n"
-                "B 切 latest/best   G 循环 prefix   U: 弹窗切分布/专项(SpeedFlip/HalfFlip/DJump)   Shift+5/6/7: 一键锁定SF/HF/DJ (Shift+0恢复)\n"
+                "回放: ←→(±1)  [ ](±30)  I/K(±60)  ,( -10)  ;(+10)  J 播放/暂停\n"
+                "速度: - / =   R 逐步重放同场景   N 新场景   M 切 HUMAN/MODEL   T 切 DET/STOCH   L 切 auto-reset\n"
+                "相机: V 切 THIRD-PARTY/POV  |  Space(POV下) 切 HARD-ATTACH ↔ BALL-CAM  |  Y 改相机参数\n"
+                "调参 & 图表: U 弹窗调参(分布/专项)  |  G 关闭/展开下方图表  |  B 切 latest/best (Shift+B 切 prefix)\n"
                 "视图: O 切换 REWARD→OBS→FLAGS   1-7 obs 组(A-G)   P 切换 DELTA   C 复制 HUD   Enter 导出CSV"
             )
         self.help = WrapAnywhereLabel(help_txt)

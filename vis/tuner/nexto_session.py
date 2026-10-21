@@ -66,7 +66,7 @@ class NextoSession(Session):
 
     def reset(self, replay_last=False, spawn_state=None):
         """重置为随机标准 Kickoff Spawn 并立即继续实时对抗。"""
-        self.env.reset_random_kickoff()
+        self.env.reset_by_config()
         self.cfg.max_decisions = MAX_DECISIONS
         self.frames.clear()
         self.playback_idx = 0
@@ -204,7 +204,7 @@ class NextoSession(Session):
         # If a goal was scored, automatically reset to a new random standard Kickoff Spawn (or pause if disabled)
         if self.env.goal_scored_this_tick:
             if self.auto_kickoff_on_goal:
-                self.env.reset_random_kickoff()
+                self.env.reset_by_config()
                 self._ticks_until_decision = 0
                 self._need_trail_clear = True
                 self.prev_actions_8d.fill(0.0)

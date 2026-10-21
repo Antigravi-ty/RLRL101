@@ -2,6 +2,14 @@
 from .model import NextoAgent, action_8d_to_car_controls, action_8d_to_input_dict
 from .obs import NextoObsBuilder
 from .env import NextoMatchEnv, parse_nexto_spawn_spec, NEXTO_CS_BINS, NEXTO_BS_BINS, DEFAULT_NEXTO_RANDOM_SPEC
+from .role_labeler import (
+    TeamRoleLabeler, compute_role_potential,
+    ROLE_CHASER, ROLE_OPTIMISTIC, ROLE_PESSIMISTIC, ROLE_FREELANCER,
+    ROLE_SHORT_NAMES, ROLE_FULL_NAMES, ROLE_EDGE_COLORS,
+)
+from .combat_obs import (
+    DualAttnObsBuilder, COMBAT_TRUNK_DIM, CAR_TOKEN_DIM, BOOST_PAD_TOKEN_DIM,
+)
 
 
 def parse_nexto_teams(val):
@@ -45,4 +53,18 @@ __all__ = [
     "action_8d_to_car_controls",
     "action_8d_to_input_dict",
     "parse_nexto_teams",
+    "TeamRoleLabeler",
+    "compute_role_potential",
+    "ROLE_CHASER",
+    "ROLE_OPTIMISTIC",
+    "ROLE_PESSIMISTIC",
+    "ROLE_FREELANCER",
+    "ROLE_SHORT_NAMES",
+    "ROLE_FULL_NAMES",
+    "ROLE_EDGE_COLORS",
+    "DualAttnObsBuilder",
+    "COMBAT_TRUNK_DIM",
+    "CAR_TOKEN_DIM",
+    "BOOST_PAD_TOKEN_DIM",
 ]
+

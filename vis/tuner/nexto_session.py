@@ -127,6 +127,12 @@ class NextoSession(Session):
         fr["car_idx"] = entry["car_idx"]
         fr["car_label"] = entry["label"]
         fr["team"] = entry["team"]
+        fr["role_id"] = entry.get("role_id", 0)
+        fr["role_code"] = entry.get("role_code", "CHSR")
+        fr["role_name"] = entry.get("role_name", "Chaser")
+        fr["role_eta_s"] = entry.get("role_eta_s", 0.0)
+        fr["role_potential"] = entry.get("role_potential", 0.0)
+        fr["role_reason"] = entry.get("role_reason", "")
         fr["input"] = entry["input"]
         fr["car_pos"] = entry["car_pos"]
         fr["car_vel"] = entry["car_vel"]
@@ -284,6 +290,12 @@ class NextoSession(Session):
                 "car_idx": i,
                 "label": self.env.car_labels[i],
                 "team": int(self.env.car_teams[i]),
+                "role_id": snap_i.get("role_id", 0),
+                "role_code": snap_i.get("role_code", "CHSR"),
+                "role_name": snap_i.get("role_name", "Chaser"),
+                "role_eta_s": snap_i.get("role_eta_s", 0.0),
+                "role_potential": snap_i.get("role_potential", 0.0),
+                "role_reason": snap_i.get("role_reason", ""),
                 "input": input_dict,
                 "car_pos": snap_i["car_pos"],
                 "car_vel": snap_i["car_vel"],

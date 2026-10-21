@@ -745,11 +745,49 @@ def verify_tuner_headless():
     spd_b = (float(bs_v.x) ** 2 + float(bs_v.y) ** 2 + float(bs_v.z) ** 2) ** 0.5
     assert (0.0 <= spd_b <= 155.0) or (3095.0 <= spd_b <= 4205.0), f"Unexpected ball speed {spd_b} for BS[100002]"
 
+    # 16. Verify 3v3 with CS[11225]BS[123468]CG[7], 4-Role Tactical Auto-Labeler (CHSR/OPTI/PESS/FREE),
+    #     and DualAttnObsBuilder (57D Trunk + 24D Car Tokens + 7D BoostPad Tokens with 50% Teammate Masking)
+    from nexto import (
+        DualAttnObsBuilder, COMBAT_TRUNK_DIM, CAR_TOKEN_DIM, BOOST_PAD_TOKEN_DIM,
+        ROLE_CHASER, ROLE_OPTIMISTIC, ROLE_PESSIMISTIC, ROLE_FREELANCER,
+    )
+    ok_u, cfg_u, _ = parse_nexto_spawn_spec("CS[11225]BS[123468]CG[7]")
+    assert ok_u and cfg_u["mode"] == "random" and cfg_u["cs_weights"] == [1, 1, 2, 2, 5] and cfg_u["bs_weights"] == [1, 2, 3, 4, 6, 8]
+
+    w_3v3 = RewardTuner(nexto_teams=[3, 3], spawn_dist="CS[11225]BS[123468]CG[7]")
+    assert w_3v3.env.n_blue == 3 and w_3v3.env.n_orange == 3 and w_3v3.env.n_cars == 6
+    assert w_3v3.env.spawn_cfg["raw"] == "CS[11225]BS[123468]CG[7]"
+    for _ in range(10):
+        w_3v3.auto_session._step_once()
+    w_3v3._render()
+
+    roles_now = w_3v3.env.current_roles
+    assert len(roles_now) == 6
+    blue_roles = [roles_now[i]["role_id"] for i in range(3)]
+    orange_roles = [roles_now[i]["role_id"] for i in range(3, 6)]
+    # Both Blue (0..2) and Orange (3..5) must have exactly 1 Chaser (ROLE_CHASER == 0)
+    assert blue_roles.count(ROLE_CHASER) == 1, f"Expected exactly 1 Blue Chaser, got {blue_roles}"
+    assert orange_roles.count(ROLE_CHASER) == 1, f"Expected exactly 1 Orange Chaser, got {orange_roles}"
+    assert "4-Role Tactical Auto-Labeler" in w_3v3.hud.toPlainText()
+
+    c_obs_unmasked = w_3v3.env.get_combat_obs(0, mask_teammates=False)
+    assert c_obs_unmasked["trunk"].shape == (COMBAT_TRUNK_DIM,), f"Expected trunk ({COMBAT_TRUNK_DIM},), got {c_obs_unmasked['trunk'].shape}"
+    assert c_obs_unmasked["car_tokens"].shape == (5, CAR_TOKEN_DIM), f"Expected car_tokens (5, {CAR_TOKEN_DIM}), got {c_obs_unmasked['car_tokens'].shape}"
+    assert c_obs_unmasked["pad_tokens"].shape == (34, BOOST_PAD_TOKEN_DIM), f"Expected pad_tokens (34, {BOOST_PAD_TOKEN_DIM}), got {c_obs_unmasked['pad_tokens'].shape}"
+    assert np.all(c_obs_unmasked["car_mask"] == 0.0), "All 5 other cars in 3v3 should be unmasked when mask_teammates=False"
+
+    c_obs_masked = w_3v3.env.get_combat_obs(0, mask_teammates=True)
+    # In 3v3, slots 0 and 1 are the 2 teammates (masked=1.0), slots 2, 3, 4 are the 3 opponents (masked=0.0)
+    assert np.all(c_obs_masked["car_mask"][:2] == 1.0) and np.all(c_obs_masked["car_mask"][2:5] == 0.0), (
+        f"Expected teammates masked [1,1,0,0,0], got {c_obs_masked['car_mask']}"
+    )
+
     print(
         f"[verify_tuner] ALL OK! Verified RewardTuner startup, {NUM_CURRICULUM_STEPS} curriculum steps, "
         f"HUD formatting, recording/playback/freerun, plot/obs/flags panels, 3-way Tab ScenarioEditor, "
         f"[Z] Boost/HasJump panel, 3D POV Ball-Cam, SpeedFlip/HalfFlip/DJump presets, MANUAL-RESET instant trajectory on N + replay on R, "
-        f"TrailRenderer synchronized jump/djump expiration, Nexto (--nexto 6 2 & 1 1) multi-car combat, "
+        f"TrailRenderer synchronized jump/djump expiration, Nexto (--nexto 6 2, 1 1, & 3 3 CS[11225]BS[123468]CG[7]) multi-car combat, "
+        f"4-Role Tactical Auto-Labeler (CHSR/OPTI/PESS/FREE) + 7D BoostPad & 24D CarEntity Dual-Attention observations, "
         f"RocketSim keyword callbacks (touch/boost/goal), reserved manual keys (WASD/QE/Shift/./> and //?), "
         f"[U] unified tuning dialog (trail duration + kickoff vs CS[...]BS[...]CG[...] random spawn), and [G] graph toggle."
     )
@@ -757,5 +795,6 @@ def verify_tuner_headless():
 
 if __name__ == "__main__":
     verify_tuner_headless()
+
 
 

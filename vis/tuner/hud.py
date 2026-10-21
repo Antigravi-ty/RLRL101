@@ -42,18 +42,43 @@ def _fmt_flags(fr):
     return f"---- flags ----\n{line1}\n{line2}\n{line3}\n"
 
 
+def _fmt_nexto_roles(session, fr):
+    if not isinstance(fr, dict):
+        return ""
+    all_cars = fr.get("all_cars")
+    if not all_cars:
+        return ""
+    f_idx = fr.get("car_idx", getattr(session.env, "focused_car_idx", 0))
+    lines = ["---- 4-Role Tactical Auto-Labeler (CHSR/OPTI/PESS/FREE) ----"]
+    for c_entry in all_cars:
+        idx = c_entry.get("car_idx", 0)
+        mark = "▶" if idx == f_idx else " "
+        lbl = c_entry.get("label", f"#{idx+1}")
+        r_code = c_entry.get("role_code", "CHSR")
+        eta = c_entry.get("role_eta_s", 0.0)
+        phi = c_entry.get("role_potential", 0.0)
+        dist = c_entry.get("dist", 0.0)
+        bst = c_entry.get("boost", 0.0)
+        lines.append(
+            f"{mark}{lbl:<10} [{r_code}] ETA={eta:4.2f}s Φ={phi:.2f} d={dist:4.0f} B={bst:3.0f}"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def _fmt_focus(session):
     env = session.env
     if getattr(session, "is_nexto_session", False) or getattr(env, "is_nexto_env", False):
         lbl = env.car_label() if hasattr(env, "car_label") else "#1"
-        f_idx = getattr(env, "focused_car_idx", 0) + 1
+        f_idx = getattr(env, "focused_car_idx", 0)
         n_cars = getattr(env, "n_cars", 1)
         nb = getattr(env, "n_blue", 0)
         no = getattr(env, "n_orange", 0)
         sb = getattr(env, "score_blue", 0)
         so = getattr(env, "score_orange", 0)
         sp_raw = env.spawn_cfg.get("raw", "kickoff") if hasattr(env, "spawn_cfg") else "kickoff"
-        return f"[NEXTO {nb}v{no} | SCORE {sb}:{so} | 视角车 {lbl} ({f_idx}/{n_cars}) | {sp_raw}]\n"
+        roles = getattr(env, "current_roles", None)
+        r_tag = f" [{roles[f_idx]['role_code']}]" if (roles and 0 <= f_idx < len(roles) and roles[f_idx]) else ""
+        return f"[NEXTO {nb}v{no} | SCORE {sb}:{so} | 视角车 {lbl}{r_tag} ({f_idx+1}/{n_cars}) | {sp_raw}]\n"
     from core.env import STAGE_SHORT_LABELS
     s_idx = getattr(env, "current_stage_idx", 0)
     s_lbl = STAGE_SHORT_LABELS[s_idx] if 0 <= s_idx < len(STAGE_SHORT_LABELS) else f"P{s_idx+1}"
@@ -72,7 +97,10 @@ def format_hud(session, current_boost, obs_group=None):
     is_nexto = getattr(session, "is_nexto_session", False) or getattr(session.env, "is_nexto_env", False)
     if is_nexto:
         lbl = session.env.car_label() if hasattr(session.env, "car_label") else "#1"
-        boost_line = f"{lbl}  BOOST: {current_boost:5.1f}   SCORE: {session.env.score_blue} - {session.env.score_orange}"
+        f_idx = getattr(session.env, "focused_car_idx", 0)
+        roles = getattr(session.env, "current_roles", None)
+        r_tag = f"[{roles[f_idx]['role_code']}] " if (roles and 0 <= f_idx < len(roles) and roles[f_idx]) else ""
+        boost_line = f"{r_tag}{lbl}  BOOST: {current_boost:5.1f}   SCORE: {session.env.score_blue} - {session.env.score_orange}"
     else:
         boost_line = f"BOOST: {current_boost:5.1f}"
     frames = session.frames
@@ -91,11 +119,18 @@ def format_hud(session, current_boost, obs_group=None):
         keys_str = fr["input"].get("keys_str", "")
         ch_list  = fr["input"].get("ppo_channels", [])
         ball_tag = "[DYNAMIC MATCH]" if is_nexto else "[STATIC TARGET]"
+        role_line = ""
+        if is_nexto:
+            role_line = (
+                f"role:  [{fr.get('role_code', 'CHSR')}] {fr.get('role_name', '')}  "
+                f"ETA={fr.get('role_eta_s', 0.0):.2f}s  Φ={fr.get('role_potential', 0.0):.2f} ({fr.get('role_reason', '')})\n"
+            )
         body = (
             f"{focus_str}"
             f"{'NEXTO' if is_nexto else ('AUTO' if is_auto else 'PLAYBACK')}  "
             f"i={fr['i']}/{len(frames)-1} (buf={len(frames)}f)  "
             f"速度 {int(session.speed*100)}%\n"
+            f"{role_line}"
             f"keys:  [{keys_str}]  ch={ch_list}\n"
             f"input: thr={fr['input']['thr']:+.0f} str={fr['input']['str']:+.0f} "
             f"ptc={fr['input']['ptc']:+.0f} yaw={fr['input']['yaw']:+.0f}\n"
@@ -113,6 +148,10 @@ def format_hud(session, current_boost, obs_group=None):
             f"{fr['ball_pos'][2]:.0f}) {ball_tag}\n"
             f"dist:  {fr['dist']:.1f}  (h={fr['dist_h']:.1f})  "
             f"closing={closing:+.1f}\n"
+        )
+        if is_nexto:
+            body += _fmt_nexto_roles(session, fr)
+        body += (
             f"---- reward (Tuner Diagnostic) ----\n"
             f"r_dist     = {d.get('r_dist', 0):+8.3f}\n"
             f"r_slide    = {d.get('r_slide', 0):+8.4f}\n"
@@ -137,14 +176,23 @@ def format_hud(session, current_boost, obs_group=None):
         closing = fr.get("closing", 0.0)
         car_spd = fr.get("car_speed", 0.0)
         keys_str = fr["input"].get("keys_str", "")
+        role_line = ""
+        if is_nexto:
+            role_line = (
+                f"role: [{fr.get('role_code', 'CHSR')}] {fr.get('role_name', '')} "
+                f"ETA={fr.get('role_eta_s', 0.0):.2f}s Φ={fr.get('role_potential', 0.0):.2f} ({fr.get('role_reason', '')})\n"
+            )
         body = (
             f"{focus_str}"
             f"{'NEXTO LIVE' if is_nexto else ('AUTO' if is_auto else 'RECORDING')}  "
             f"step={fr['i']} (buf={len(frames)})  r_cum={fr['r_cum']:+.3f}\n"
+            f"{role_line}"
             f"keys: [{keys_str}]\n"
             f"dist={fr['dist']:.1f}  spd={car_spd:.1f}  closing={closing:+.1f}\n"
             f"boost={fr['boost']:.1f}  air={fr['air_time']:.2f}  flip={int(fr['is_flipping'])}\n"
         )
+        if is_nexto:
+            body += _fmt_nexto_roles(session, fr)
         body += _fmt_flags(fr)
         if obs_group:
             body += _fmt_obs_group(fr, obs_group)

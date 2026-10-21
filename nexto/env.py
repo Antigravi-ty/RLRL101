@@ -257,6 +257,11 @@ class NextoMatchEnv:
         self.last_obs_panel = None
         self.last_parts = None
 
+        from .role_labeler import TeamRoleLabeler
+        self.role_labeler = TeamRoleLabeler()
+        self.current_roles = []
+        self._step_counter = 0
+
         def _on_touch(arena=None, car=None, data=None, *args, **kwargs):
             if car is not None:
                 idx = self.car_id_to_idx.get(car.id)
@@ -422,6 +427,8 @@ class NextoMatchEnv:
         bx, by, bz = float(bs.pos.x), float(bs.pos.y), float(bs.pos.z)
         self.goal_scored_this_tick = False
         self._touched = False
+        self._step_counter = 0
+        self.role_labeler.reset()
         for i, c in enumerate(self.cars):
             self._touched_by_car[i] = False
             self._boost_pickups_by_car[i] = 0
@@ -433,6 +440,9 @@ class NextoMatchEnv:
 
         self.init_dist = self.init_dists[self.focused_car_idx]
         self.min_dist = self.min_dists[self.focused_car_idx]
+        self.current_roles = self.role_labeler.compute_roles(
+            self.cars, self.car_teams, self.arena, step_seq=0, touched_by_car=self._touched_by_car
+        )
 
     def reset_random_state(self):
         """根据 self.spawn_cfg (CS[5位]BS[6位]CG[0..10]) 进行全场球与多车的随机位置/初速/地面空中状态重置。"""
@@ -643,7 +653,29 @@ class NextoMatchEnv:
 
             step_results.append((b_used, f_trig, dj_trig, pickups))
 
+        self._step_counter += 1
+        self.current_roles = self.role_labeler.compute_roles(
+            self.cars, self.car_teams, self.arena, step_seq=self._step_counter, touched_by_car=self._touched_by_car
+        )
         return step_results
+
+    def get_combat_obs(self, car_idx: int = None, mask_teammates: bool = False) -> dict:
+        from .combat_obs import DualAttnObsBuilder
+        idx = self.focused_car_idx if car_idx is None else max(0, min(int(car_idx), self.n_cars - 1))
+        if not self.current_roles or len(self.current_roles) != self.n_cars:
+            self.current_roles = self.role_labeler.compute_roles(
+                self.cars, self.car_teams, self.arena, step_seq=self._step_counter, touched_by_car=self._touched_by_car
+            )
+        return DualAttnObsBuilder.build_car_combat_obs(
+            car_idx=idx,
+            cars=self.cars,
+            car_teams=self.car_teams,
+            arena=self.arena,
+            pads=self.pads,
+            prev_action_vec=self.prev_action_vecs[idx],
+            roles_info=self.current_roles,
+            mask_teammates=mask_teammates,
+        )
 
     def get_obs(self, car_idx: int = None):
         idx = self.focused_car_idx if car_idx is None else max(0, min(int(car_idx), self.n_cars - 1))
@@ -652,6 +684,11 @@ class NextoMatchEnv:
             self.arena,
             prev_action_vec=self.prev_action_vecs[idx],
         )
+        combat_dict = self.get_combat_obs(idx)
+        trunk_57 = combat_dict["trunk"]
+        parts["K.up_ref_kin"]  = trunk_57[42:53].copy()
+        parts["L.role_onehot"] = trunk_57[53:57].copy()
+        parts["combat_obs"]    = combat_dict
         if idx == self.focused_car_idx:
             self.last_obs = obs_full
             self.last_obs_panel = obs_panel
@@ -685,10 +722,23 @@ class NextoMatchEnv:
         car_speed = float(math.hypot(cs.vel.x, cs.vel.y, cs.vel.z))
         has_flip_or_jump = bool(cs.has_flip_or_jump() if callable(cs.has_flip_or_jump) else cs.has_flip_or_jump)
 
+        if not self.current_roles or len(self.current_roles) != self.n_cars:
+            self.current_roles = self.role_labeler.compute_roles(
+                self.cars, self.car_teams, self.arena, step_seq=self._step_counter, touched_by_car=self._touched_by_car
+            )
+        role_info = self.current_roles[idx]
+
         return {
             "car_idx": idx,
             "team": int(self.car_teams[idx]),
             "label": self.car_labels[idx],
+            "role_id": int(role_info["role_id"]),
+            "role_code": str(role_info["role_code"]),
+            "role_name": str(role_info["role_name"]),
+            "role_onehot": role_info["role_onehot"],
+            "role_eta_s": float(role_info["eta_s"]),
+            "role_potential": float(role_info["potential"]),
+            "role_reason": str(role_info["reason"]),
             "car_pos": (float(cs.pos.x), float(cs.pos.y), float(cs.pos.z)),
             "car_vel": (float(cs.vel.x), float(cs.vel.y), float(cs.vel.z)),
             "car_ang": (float(cs.ang_vel.x), float(cs.ang_vel.y), float(cs.ang_vel.z)),

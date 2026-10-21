@@ -139,8 +139,9 @@ class ObsPlotPanel:
             ys = []
             for f in frames:
                 parts = f.get("obs_parts")
-                ys.append(0.0 if parts is None
-                          else float(parts[group_name][k]))
+                arr_g = parts.get(group_name) if parts is not None else None
+                ys.append(0.0 if (arr_g is None or k >= len(arr_g))
+                          else float(arr_g[k]))
             if delta:
                 ys = _diff(ys)
             self.curves[lab] = self.widget.plot(

@@ -3,6 +3,21 @@ import sys, os, argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+def _extract_nexto_and_spawn(nexto_list, extra_args):
+    if nexto_list is None:
+        return None, None
+    teams_tokens = []
+    spawn_override = None
+    for tok in list(nexto_list) + list(extra_args or []):
+        s = str(tok).strip()
+        su = s.upper()
+        if any(k in su for k in ("CS[", "BS[", "CG[")) or su in ("KICKOFF", "KO", "RANDOM", "RND"):
+            spawn_override = s
+        elif s.isdigit() or ("v" in s.lower() and s.lower().replace("v", "").isdigit()):
+            teams_tokens.append(s)
+    return teams_tokens, spawn_override
+
+
 def _parse_args():
     ap = argparse.ArgumentParser(add_help=False)
     ap.add_argument("--prefix", default=None)
@@ -13,8 +28,13 @@ def _parse_args():
     ap.add_argument("--cam-params", dest="cam_params", default=None,
                     help="Camera params e.g. 'back=320,up=110,elev=12,azim=0,fov=75'")
     ap.add_argument("--nexto", "--what", dest="nexto_teams", nargs="*", default=None,
-                    help="Launch Nexto NvM live match mode, e.g. '--nexto 6 2' or '--nexto 3 3'")
-    args, _ = ap.parse_known_args()
+                    help="Launch Nexto NvM live match mode, e.g. '--nexto 3 3 CS[11225]BS[123468]CG[7]'")
+    args, unknown = ap.parse_known_args()
+    if args.nexto_teams is not None:
+        t_toks, sp_ov = _extract_nexto_and_spawn(args.nexto_teams, unknown)
+        args.nexto_teams = t_toks
+        if sp_ov and not args.spawn_dist:
+            args.spawn_dist = sp_ov
     return args
 
 

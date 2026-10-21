@@ -67,7 +67,10 @@ class MultiCarSceneRenderer:
                     )
 
     def render_live(self, env, focused_idx: int = 0, now: float = None):
-        """渲染实时对战帧的所有车辆及其轨迹。"""
+        """渲染实时对战帧的所有车辆及其轨迹（含四角色边框/散点高亮）。"""
+        from nexto.role_labeler import ROLE_EDGE_COLORS, ROLE_CHASER
+        roles = getattr(env, "current_roles", None)
+
         for i, car in enumerate(env.cars):
             cs = car.get_state()
             pos_r = sc.r2r((cs.pos.x, cs.pos.y, cs.pos.z))
@@ -87,29 +90,33 @@ class MultiCarSceneRenderer:
 
             is_focused = (i == focused_idx)
             team = self.car_teams[i]
+            r_id = roles[i]["role_id"] if (roles and i < len(roles) and roles[i]) else ROLE_CHASER
+            role_col = ROLE_EDGE_COLORS.get(r_id)
+
             if is_focused:
                 edge_col = (1.0, 1.0, 1.0, 0.98)
-                edge_w = 3.0
-                dot_col = (1.0, 1.0, 1.0, 1.0)
-                dot_size = 20
+                edge_w = 3.2
+                dot_col = role_col if role_col is not None else (1.0, 1.0, 1.0, 1.0)
+                dot_size = 21
             else:
-                edge_col = None
-                edge_w = 2.0
-                dot_col = (0.25, 0.80, 1.0, 0.90) if team == 0 else (1.0, 0.55, 0.20, 0.90)
-                dot_size = 13
+                edge_col = role_col if r_id == ROLE_CHASER else None
+                edge_w = 2.6 if r_id == ROLE_CHASER else 2.0
+                dot_col = role_col if role_col is not None else ((0.25, 0.80, 1.0, 0.90) if team == 0 else (1.0, 0.55, 0.20, 0.90))
+                dot_size = 16 if r_id == ROLE_CHASER else 13
 
             self.scatters[i].setData(pos=pos_r.reshape(1, 3), color=dot_col, size=dot_size)
             self.hitboxes[i].update(
                 pos_r, fwd_r, up_r, rgt_r,
-                length=260.0 if is_focused else 190.0,
+                length=260.0 if is_focused else (215.0 if r_id == ROLE_CHASER else 190.0),
                 edge_color_override=edge_col,
                 edge_width=edge_w,
             )
 
     def render_playback_frame(self, frames, playback_idx: int, focused_idx: int = 0):
-        """在回放/暂停状态下重绘所有车辆在 playback_idx 时刻的位置与窗口内轨迹。"""
+        """在回放/暂停状态下重绘所有车辆在 playback_idx 时刻的位置、窗口内轨迹与四角色高亮。"""
         if not frames or playback_idx < 0 or playback_idx >= len(frames):
             return
+        from nexto.role_labeler import ROLE_EDGE_COLORS, ROLE_CHASER
         fr = frames[playback_idx]
         cars_snaps = fr.get("all_cars")
         if not cars_snaps:
@@ -139,21 +146,24 @@ class MultiCarSceneRenderer:
             rgt_r = sc.vec_r2r_tuple(cs_now["right"])
             is_focused = (i == focused_idx)
             team = self.car_teams[i]
+            r_id = int(cs_now.get("role_id", ROLE_CHASER))
+            role_col = ROLE_EDGE_COLORS.get(r_id)
+
             if is_focused:
                 edge_col = (1.0, 1.0, 1.0, 0.98)
-                edge_w = 3.0
-                dot_col = (1.0, 1.0, 1.0, 1.0)
-                dot_size = 20
+                edge_w = 3.2
+                dot_col = role_col if role_col is not None else (1.0, 1.0, 1.0, 1.0)
+                dot_size = 21
             else:
-                edge_col = None
-                edge_w = 2.0
-                dot_col = (0.25, 0.80, 1.0, 0.90) if team == 0 else (1.0, 0.55, 0.20, 0.90)
-                dot_size = 13
+                edge_col = role_col if r_id == ROLE_CHASER else None
+                edge_w = 2.6 if r_id == ROLE_CHASER else 2.0
+                dot_col = role_col if role_col is not None else ((0.25, 0.80, 1.0, 0.90) if team == 0 else (1.0, 0.55, 0.20, 0.90))
+                dot_size = 16 if r_id == ROLE_CHASER else 13
 
             self.scatters[i].setData(pos=pos_r.reshape(1, 3), color=dot_col, size=dot_size)
             self.hitboxes[i].update(
                 pos_r, fwd_r, up_r, rgt_r,
-                length=260.0 if is_focused else 190.0,
+                length=260.0 if is_focused else (215.0 if r_id == ROLE_CHASER else 190.0),
                 edge_color_override=edge_col,
                 edge_width=edge_w,
             )

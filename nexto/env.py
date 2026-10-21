@@ -115,18 +115,18 @@ class NextoMatchEnv:
         self.last_obs_panel = None
         self.last_parts = None
 
-        def _on_touch(arena, car, *args):
+        def _on_touch(arena, car, data=None, *args, **kwargs):
             idx = self.car_id_to_idx.get(car.id)
             if idx is not None:
                 self._touched_by_car[idx] = True
             self._touched = True
 
-        def _on_boost_pickup(arena, car, *args):
+        def _on_boost_pickup(arena, car, boost_pad=None, data=None, *args, **kwargs):
             idx = self.car_id_to_idx.get(car.id)
             if idx is not None:
                 self._boost_pickups_by_car[idx] += 1
 
-        def _on_goal(arena, scoring_team, *args):
+        def _on_goal(arena, scoring_team, data=None, *args, **kwargs):
             self.goal_scored_this_tick = True
             self.last_goal_team = int(scoring_team)
             if int(scoring_team) == 0:

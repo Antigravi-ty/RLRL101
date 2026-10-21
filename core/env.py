@@ -74,10 +74,10 @@ class BallReachEnv(SpawnerMixin):
         self._touched = False
         self._boost_pickups_tick = 0
 
-        def _on_touch(arena, car, data):
+        def _on_touch(arena, car, data=None, *args, **kwargs):
             self._touched = True
 
-        def _on_boost_pickup(arena, car, boost_pad, data):
+        def _on_boost_pickup(arena, car, boost_pad=None, data=None, *args, **kwargs):
             self._boost_pickups_tick += 1
 
         self.arena.set_ball_touch_callback(_on_touch)

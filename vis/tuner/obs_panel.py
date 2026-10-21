@@ -25,8 +25,10 @@ def _diff(ys):
 
 
 class ObsPlotPanel:
-    def __init__(self, widget: pg.PlotWidget):
+    def __init__(self, widget: pg.PlotWidget, max_window: int = 600):
         self.widget = widget
+        self.max_window = max(10, int(max_window))
+        self.last_x_range = (0.0, float(self.max_window))
         self.widget.setBackground('k')
         self.widget.showGrid(x=True, y=True, alpha=0.3)
         self.widget.setLabel('left', 'obs')
@@ -38,7 +40,23 @@ class ObsPlotPanel:
         self.cursor_line = pg.InfiniteLine(
             angle=90, movable=False,
             pen=pg.mkPen('w', style=QtCore.Qt.DashLine))
-        self.widget.addItem(self.cursor_line)
+        self.widget.addItem(self.cursor_line, ignoreBounds=True)
+
+    def set_max_window(self, max_window: int):
+        self.max_window = max(10, int(max_window))
+
+    def _apply_dynamic_x_range(self, xs, auto_y: bool = True):
+        if not xs:
+            return
+        x_max = float(xs[-1])
+        x_min = float(xs[0]) if len(xs) > 1 else max(0.0, x_max - 1.0)
+        if x_max <= x_min:
+            x_max = x_min + 1.0
+        self.last_x_range = (x_min, x_max)
+        self.cursor_line.setPos(float(xs[-1]))
+        self.widget.setXRange(x_min, x_max, padding=0.0)
+        if auto_y:
+            self.widget.getViewBox().enableAutoRange(axis='y', enable=True)
 
     def clear(self):
         for c in self.curves.values():
@@ -46,15 +64,23 @@ class ObsPlotPanel:
         self.curves.clear()
         self.legend.clear()
         self.cursor_line.setPos(0)
+        self.last_x_range = (0.0, float(self.max_window))
+        self.widget.setXRange(0.0, float(self.max_window), padding=0.0)
         self.widget.getViewBox().enableAutoRange(axis='y', enable=True)
-        self.widget.getViewBox().autoRange()
 
-    def set_cursor(self, idx):
-        self.cursor_line.setPos(idx)
+    def set_cursor(self, idx, frames=None):
+        if frames and 0 <= idx < len(frames):
+            self.cursor_line.setPos(frames[idx]["i"])
+        else:
+            self.cursor_line.setPos(idx)
 
-    def update_group(self, group_name: str, frames, delta: bool = False):
+    def update_group(self, group_name: str, frames, delta: bool = False, max_window: int = None):
+        if max_window is not None:
+            self.set_max_window(max_window)
         if not frames:
             return
+        if len(frames) > self.max_window:
+            frames = list(frames)[-self.max_window:]
         self.widget.getViewBox().enableAutoRange(axis='y', enable=True)
 
         for c in self.curves.values():
@@ -83,11 +109,11 @@ class ObsPlotPanel:
                     name=f"{lab}{dtag} (clip±{clip:.0f})")
                 c = _F_DELTA_CLIP * 1.1
                 self.widget.setYRange(-c, c, padding=0)
+                self._apply_dynamic_x_range(xs, auto_y=False)
             else:
                 self.curves[lab] = self.widget.plot(
                     xs, ys, pen=pg.mkPen('y', width=2), name=lab)
-                self.widget.getViewBox().enableAutoRange(axis='y', enable=True)
-                self.widget.getViewBox().autoRange()
+                self._apply_dynamic_x_range(xs, auto_y=True)
             return
 
         if group_name not in OBS_GROUPS:
@@ -106,8 +132,7 @@ class ObsPlotPanel:
                 self.curves[lab] = self.widget.plot(
                     xs, ys, pen=pg.mkPen(palette[k], width=2),
                     name=f"{lab}{dtag}")
-            self.widget.getViewBox().enableAutoRange(axis='y', enable=True)
-            self.widget.getViewBox().autoRange()
+            self._apply_dynamic_x_range(xs, auto_y=True)
             return
 
         for k, lab in enumerate(labels):
@@ -121,12 +146,15 @@ class ObsPlotPanel:
             self.curves[lab] = self.widget.plot(
                 xs, ys, pen=pg.mkPen(palette[k % len(palette)], width=2),
                 name=f"{lab}{dtag}")
-        self.widget.getViewBox().enableAutoRange(axis='y', enable=True)
-        self.widget.getViewBox().autoRange()
+        self._apply_dynamic_x_range(xs, auto_y=True)
 
-    def update_flags(self, frames):
+    def update_flags(self, frames, max_window: int = None):
+        if max_window is not None:
+            self.set_max_window(max_window)
         if not frames:
             return
+        if len(frames) > self.max_window:
+            frames = list(frames)[-self.max_window:]
         self.widget.getViewBox().enableAutoRange(axis='y', enable=True)
         for c in self.curves.values():
             self.widget.removeItem(c)
@@ -146,4 +174,4 @@ class ObsPlotPanel:
             self.curves[key] = self.widget.plot(
                 xs, ys, pen=pg.mkPen(palette[k % len(palette)], width=2),
                 name=f"{k}:{key}")
-        self.widget.getViewBox().autoRange()
+        self._apply_dynamic_x_range(xs, auto_y=True)

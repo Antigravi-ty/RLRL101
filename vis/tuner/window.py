@@ -68,6 +68,8 @@ class RewardTuner(UIMixin, KeysMixin, ViewsMixin, RenderMixin, AutoMixin,
         self.obs_group_idx = int(self._qsettings.value("obs_group_idx", 0))
         self.delta_mode = self._qsettings.value("delta_mode", False, type=bool)
         self.plot_mode = int(self._qsettings.value("plot_mode", 1))
+        self.trail_duration = max(10, int(self._qsettings.value("trail_duration", 600)))
+        self.plot_visible = self._qsettings.value("plot_visible", True, type=bool)
 
         self._last_plot_t = 0.0
         self._last_rendered_idx = None
@@ -75,7 +77,10 @@ class RewardTuner(UIMixin, KeysMixin, ViewsMixin, RenderMixin, AutoMixin,
 
         if self.is_nexto_mode:
             nb, no = self.nexto_teams
-            self.setWindowTitle(f"Reward Tuner v10 — Nexto Live Match ({nb}v{no}) [R: Kickoff | 1-8/9/0: 选车 | V: 视角]")
+            self.setWindowTitle(
+                f"Reward Tuner v10 — Nexto Live Match ({nb}v{no}) "
+                f"[R: Kickoff | 1-8/9/0: 选车 | V: 视角 | D/U: 轨迹时长 | G/\\: 开关图表]"
+            )
         else:
             self.setWindowTitle("Reward Tuner v10 (Ground-Centric Static Ball Master + 3-Way Tab Editor)")
         self.resize(1600, 900)
@@ -86,7 +91,7 @@ class RewardTuner(UIMixin, KeysMixin, ViewsMixin, RenderMixin, AutoMixin,
             from .nexto_session import NextoSession
             nb, no = self.nexto_teams
             self.env = NextoMatchEnv(n_blue=nb, n_orange=no)
-            self.session = NextoSession(self.env, RewardConfig())
+            self.session = NextoSession(self.env, RewardConfig(), max_buffer_frames=self.trail_duration)
             self.session.plot_mode = self.plot_mode
             self.auto_session = self.session
             self.use_auto = True
@@ -162,16 +167,20 @@ class RewardTuner(UIMixin, KeysMixin, ViewsMixin, RenderMixin, AutoMixin,
         if sess.state == STATE_RECORDING:
             reason = sess.advance_recording(self.keys, time.time())
             now = time.time()
-            if (now - self._last_plot_t) >= PLOT_REFRESH_S:
+            if getattr(self, "plot_visible", True) and (now - self._last_plot_t) >= PLOT_REFRESH_S:
                 self._last_plot_t = now
                 if self.view_mode == "reward":
-                    self.plot.update_mode(sess.plot_mode, sess.frames, delta=self.delta_mode)
+                    self.plot.update_mode(
+                        sess.plot_mode, sess.frames,
+                        delta=self.delta_mode, max_window=self.trail_duration,
+                    )
                 elif self.view_mode == "obs":
                     self.obs_panel.update_group(
                         GROUP_ORDER[self.obs_group_idx], sess.frames,
-                        delta=self.delta_mode)
+                        delta=self.delta_mode, max_window=self.trail_duration,
+                    )
                 else:
-                    self.obs_panel.update_flags(sess.frames)
+                    self.obs_panel.update_flags(sess.frames, max_window=self.trail_duration)
 
             if reason:
                 msg = sess.finish_recording(reason)
@@ -190,9 +199,9 @@ class RewardTuner(UIMixin, KeysMixin, ViewsMixin, RenderMixin, AutoMixin,
             ended = sess.tick_playback()
             if sess.playback_idx != before:
                 if self.view_mode == "reward":
-                    self.plot.set_cursor(sess.playback_idx)
+                    self.plot.set_cursor(sess.playback_idx, sess.frames)
                 else:
-                    self.obs_panel.set_cursor(sess.playback_idx)
+                    self.obs_panel.set_cursor(sess.playback_idx, sess.frames)
             if ended:
                 self._refresh_ui_state()
 

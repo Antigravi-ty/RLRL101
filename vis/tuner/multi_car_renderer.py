@@ -44,6 +44,28 @@ class MultiCarSceneRenderer:
             tr.clear()
         self._prev_boosts = [None] * self.n_cars
 
+    def set_max_trail_len(self, max_trail_len: int, frames=None):
+        self.max_trail_len = max(2, int(max_trail_len))
+        self.max_trail_age_s = max(0.05, float(self.max_trail_len) / 120.0)
+        for tr in self.trails:
+            tr.set_max_len(self.max_trail_len, max_age_s=self.max_trail_age_s)
+        if frames:
+            frames_list = list(frames)[-self.max_trail_len:]
+            for i in range(self.n_cars):
+                self.trails[i].clear()
+                for f_t in frames_list:
+                    c_list = f_t.get("all_cars")
+                    if not c_list or i >= len(c_list):
+                        continue
+                    cs_i = c_list[i]
+                    self.trails[i].push(
+                        sc.r2r(cs_i["car_pos"]),
+                        boosting=cs_i.get("boosting", 0.0),
+                        jumping=cs_i.get("is_jumping", False),
+                        djump_or_flip=cs_i.get("djump_or_flip", False),
+                        now=float(f_t.get("i", 0)) / 120.0,
+                    )
+
     def render_live(self, env, focused_idx: int = 0, now: float = None):
         """渲染实时对战帧的所有车辆及其轨迹。"""
         for i, car in enumerate(env.cars):

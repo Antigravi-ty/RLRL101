@@ -88,6 +88,16 @@ class NextoSession(Session):
             return True
         return False
 
+    def set_buffer_duration(self, max_frames: int):
+        """动态调整环形缓冲区持续帧数 (如 600 -> 100)，自动截断超出窗口的旧帧并与下方图表同步。"""
+        self.max_buffer_frames = max(10, int(max_frames))
+        recent = list(self.frames)[-self.max_buffer_frames:]
+        self.frames = deque(recent, maxlen=self.max_buffer_frames)
+        if self.frames:
+            self.playback_idx = max(0, min(self.playback_idx, len(self.frames) - 1))
+        else:
+            self.playback_idx = 0
+
     def select_car(self, index_0_based: int) -> int:
         new_idx = self.env.select_car(index_0_based)
         self._reproject_frames_to_car(new_idx)

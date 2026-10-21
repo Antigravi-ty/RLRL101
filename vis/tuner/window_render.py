@@ -20,7 +20,8 @@ class RenderMixin:
             car_pos, ball_pos = snap["car_pos"], snap["ball_pos"]
             pos_r = sc.r2r(car_pos)
             ball_r = sc.r2r(ball_pos)
-            self.multi_car_renderer.render_live(self.env, focused_idx=self.env.focused_car_idx)
+            sim_now = (float(sess._step_seq) / 120.0) if getattr(sess, "_step_seq", 0) > 0 else None
+            self.multi_car_renderer.render_live(self.env, focused_idx=self.env.focused_car_idx, now=sim_now)
 
             fwd_r = sc.vec_r2r(self.env.car.get_forward_dir())
             up_r  = sc.vec_r2r(self.env.car.get_up_dir())
@@ -68,7 +69,8 @@ class RenderMixin:
         djump_or_flip = bool(cs.has_double_jumped or cs.is_flipping)
 
         pos_r = sc.r2r(car_pos)
-        self.trail.push(pos_r, boosting=boosting, jumping=jumping, djump_or_flip=djump_or_flip)
+        sim_now = (float(len(sess.frames)) / 120.0) if sess.frames else None
+        self.trail.push(pos_r, boosting=boosting, jumping=jumping, djump_or_flip=djump_or_flip, now=sim_now)
 
         self.car_scatter.setData(pos=pos_r.reshape(1, 3), color=(1, 1, 1, 1), size=18)
         fwd_r = sc.vec_r2r(self.env.car.get_forward_dir())
@@ -237,7 +239,8 @@ class RenderMixin:
             )
 
         self.trail.clear()
-        start = max(0, sess.playback_idx - 800)
+        trail_dur = max(10, int(getattr(self, "trail_duration", 600)))
+        start = max(0, sess.playback_idx - trail_dur)
         for i in range(start, sess.playback_idx + 1):
             f = sess.frames[i]
             prev_f = sess.frames[i - 1] if i > 0 else None
@@ -246,7 +249,7 @@ class RenderMixin:
             fl = f.get("flags") or {}
             jumping = bool(fl.get("is_jumping", False))
             djump_or_flip = bool(fl.get("has_djump", False) or fl.get("is_flipping", False) or f.get("is_flipping", False))
-            self.trail.push(sc.r2r(f["car_pos"]), boosting=boosting, jumping=jumping, djump_or_flip=djump_or_flip)
+            self.trail.push(sc.r2r(f["car_pos"]), boosting=boosting, jumping=jumping, djump_or_flip=djump_or_flip, now=float(i) / 120.0)
 
         self.axes.update(pos_r, fwd_r, up_r, rgt_r)
         sc.update_pad_colors(self.big_pads, self.small_pads,

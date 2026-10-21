@@ -138,6 +138,12 @@ class KeysMixin:
         if k == QtCore.Qt.Key_U:
             self._prompt_spawn_dist(); return
 
+        if k == QtCore.Qt.Key_F8 or (self.use_auto and k == QtCore.Qt.Key_D):
+            self._prompt_trail_duration(); return
+
+        if k in (QtCore.Qt.Key_Backslash, QtCore.Qt.Key_QuoteLeft, QtCore.Qt.Key_AsciiTilde, QtCore.Qt.Key_F9):
+            self._toggle_plot_visibility(); return
+
         # Shift + 1..4: Quick-lock Phase 1..4; Shift+5: Speed-Flip; Shift+6: Half-Flip; Shift+7: Double-Jump; Shift+0: restore auto
         if (
             (mods & QtCore.Qt.ShiftModifier)
@@ -225,7 +231,21 @@ class KeysMixin:
             self._reset_session(replay_last=False)
             e.accept(); return
 
-        # 2. 相机控制: V (切换 CENTER / POV), Space (切换 POV 子模式 ATTACH / BALL-CAM), Y/H (参数微调)
+        # 2. 轨迹持续时间弹窗 (D / U / F8) 与下方图表开关 (G / \ / ` / F9)
+        if k in (QtCore.Qt.Key_D, QtCore.Qt.Key_U, QtCore.Qt.Key_F8):
+            self._prompt_trail_duration()
+            e.accept(); return
+        if k in (
+            QtCore.Qt.Key_G,
+            QtCore.Qt.Key_Backslash,
+            QtCore.Qt.Key_QuoteLeft,
+            QtCore.Qt.Key_AsciiTilde,
+            QtCore.Qt.Key_F9,
+        ):
+            self._toggle_plot_visibility()
+            e.accept(); return
+
+        # 3. 相机控制: V (切换 CENTER / POV), Space (切换 POV 子模式 ATTACH / BALL-CAM), Y/H (参数微调)
         if k == QtCore.Qt.Key_V:
             self._toggle_camera_mode()
             e.accept(); return
@@ -236,7 +256,7 @@ class KeysMixin:
             self._prompt_camera_params()
             e.accept(); return
 
-        # 3. 视图/差分/曲线切换: O (切换 RWD/OBS/FLG), P (一阶差分), Tab / F1..F7 / Alt+1..7 (切换子曲线/Obs组)
+        # 4. 视图/差分/曲线切换: O (切换 RWD/OBS/FLG), P (一阶差分), Tab / F1..F7 / Alt+1..7 (切换子曲线/Obs组)
         if k == QtCore.Qt.Key_O:
             self._cycle_view_mode()
             e.accept(); return
@@ -262,7 +282,7 @@ class KeysMixin:
                 self._set_plot_mode(idx + 1)
             e.accept(); return
 
-        # 4. 车辆选择与切换 (支持主键盘与小键盘 Numpad):
+        # 5. 车辆选择与切换 (支持主键盘与小键盘 Numpad):
         #    1..8: 选择第 1..8 辆车 (超出当前车辆总数时自动落到最后一辆车，如 1v1 按 7 -> 第 2 辆车)
         #    9   : 切换上一辆车
         #    0   : 切换下一辆车
@@ -278,7 +298,7 @@ class KeysMixin:
                 self._cycle_nexto_car(+1)
                 e.accept(); return
 
-        # 5. 倍速、推理模式 (DET/STOCH)、进球重置开关、复制 HUD、导出帧
+        # 6. 倍速、推理模式 (DET/STOCH)、进球重置开关、复制 HUD、导出帧
         if k == QtCore.Qt.Key_Minus:
             self._adjust_speed(-SPEED_STEP); e.accept(); return
         if k in (QtCore.Qt.Key_Equal, QtCore.Qt.Key_Plus):
@@ -297,7 +317,7 @@ class KeysMixin:
                 self._refresh_ui_state(f"已保存: {os.path.basename(fn)}")
             e.accept(); return
 
-        # 6. 暂停 / 历史帧回放与逐帧步进 (J / ' 切换 LIVE <-> PAUSE <-> PLAYBACK)
+        # 7. 暂停 / 历史帧回放与逐帧步进 (J / ' 切换 LIVE <-> PAUSE <-> PLAYBACK)
         if k in (QtCore.Qt.Key_J, QtCore.Qt.Key_Apostrophe):
             sess.toggle_playback()
             self._update_plots_from_frames(sess)

@@ -240,13 +240,15 @@ class UIMixin:
         )
         self.view.addItem(self.ball_mesh)
 
+        trail_dur = max(10, int(getattr(self, "trail_duration", 600)))
+        trail_age_s = max(0.05, float(trail_dur) / 120.0)
         if getattr(self, "is_nexto_mode", False):
             from .multi_car_renderer import MultiCarSceneRenderer
             self.multi_car_renderer = MultiCarSceneRenderer(
                 self.view,
                 self.env.car_teams,
-                max_trail_len=600,
-                max_trail_age_s=5.0,
+                max_trail_len=trail_dur,
+                max_trail_age_s=trail_age_s,
             )
             self.trail = self.multi_car_renderer.trails[0]
             self.car_scatter = self.multi_car_renderer.scatters[0]
@@ -256,7 +258,7 @@ class UIMixin:
             self.car_scatter = gl.GLScatterPlotItem()
             self.car_scatter.setData(pos=np.zeros((1, 3)), color=(1, 1, 1, 1), size=18)
             self.view.addItem(self.car_scatter)
-            self.trail = sc.TrailRenderer(self.view, max_len=600, max_age_s=6.0)
+            self.trail = sc.TrailRenderer(self.view, max_len=trail_dur, max_age_s=trail_age_s)
             self.axes = sc.CarAxesRenderer(self.view)
 
         self.ball_guides    = sc.BallGuideLinesRenderer(self.view)
@@ -267,10 +269,11 @@ class UIMixin:
         self.speed_bar = SpeedDividerBar()
         left.addWidget(self.speed_bar, stretch=0)
 
-        plot_widget = pg.PlotWidget()
-        left.addWidget(plot_widget, stretch=0)
-        self.plot = RewardPlotPanel(plot_widget)
-        self.obs_panel = ObsPlotPanel(plot_widget)
+        self.plot_widget = pg.PlotWidget()
+        left.addWidget(self.plot_widget, stretch=0)
+        self.plot = RewardPlotPanel(self.plot_widget, max_window=trail_dur)
+        self.obs_panel = ObsPlotPanel(self.plot_widget, max_window=trail_dur)
+        self.plot_widget.setVisible(bool(getattr(self, "plot_visible", True)))
 
         self.right_panel = QtWidgets.QWidget()
         self.right_panel.setFixedWidth(self.RIGHT_PANEL_WIDTH)
@@ -336,7 +339,7 @@ class UIMixin:
                 "车辆切换(支持主键盘与小键盘): 1-8 选择第 1-8 辆车 (超出总车数自动切换到最后一辆车)  |  9: 上一辆车  |  0: 下一辆车\n"
                 "相机视角: 默认聚焦场地中心 (CENTER)  |  V: 切 CENTER ↔ POV(跟随当前选中车)  |  Space(POV下): 切 HARD-ATTACH ↔ BALL-CAM\n"
                 "推理/速率: T 切换 DET(最优) ↔ STOCH(采样)  |  - / = 调节速度  |  J(或 ') 暂停/回放  |  ←→ / [/] / I/K 逐帧查看\n"
-                "轨迹(自动定时销毁防溢出): 蓝/橙线=滑行  金线=喷气  绿点=一段跳(Jump)  紫红点=二段跳/翻滚(DoubleJump/Dodge)\n"
+                "轨迹与图表控制: D (或 U / F8) 弹窗修改轨迹与下方图表持续时间(如 600→100帧)  |  G (或 \\ / F9) 关闭/展开下方图表扩大视野\n"
                 "视图/曲线(无数字键冲突): O 切换 REWARD→OBS→FLAGS  |  Tab(或 Alt+1-7 / F1-F7) 切换子曲线/观测组  |  P 切 DELTA  |  C 复制HUD"
             )
         else:
@@ -346,7 +349,7 @@ class UIMixin:
                 "回放: ←→(±1)  [ ](±30)  I/K(±60)  ,( -10)  ;(+10)  J 或 ' 播放/暂停\n"
                 "速度: - / =   R 逐步重放同场景   N 新场景(MANUAL-RESET下直接画出完整轨迹)   M 切 HUMAN/MODEL   T 切 DET/STOCH   L 切 auto-reset\n"
                 "相机: V 切 THIRD-PARTY/POV  |  Space(POV下) 切 HARD-ATTACH ↔ BALL-CAM(3D俯仰聚焦球)  |  Y(或H) 改相机参数\n"
-                "轨迹: 青线=滑行  金线=喷气  绿点=一段跳(Jump触发点)  紫红点=二段跳/翻滚(DoubleJump/Dodge触发点)\n"
+                "轨迹与图表: F8(或MODEL下按D) 弹窗修改轨迹/图表持续时间(如 600→100)  |  \\ (或F9) 关闭/展开下方图表扩大场地视野\n"
                 "B 切 latest/best   G 循环 prefix   U: 弹窗切分布/专项(SpeedFlip/HalfFlip/DJump)   Shift+5/6/7: 一键锁定SF/HF/DJ (Shift+0恢复)\n"
                 "视图: O 切换 REWARD→OBS→FLAGS   1-7 obs 组(A-G)   P 切换 DELTA   C 复制 HUD   Enter 导出CSV"
             )

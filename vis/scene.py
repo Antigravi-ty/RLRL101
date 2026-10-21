@@ -281,6 +281,23 @@ class TrailRenderer:
         self._pts_meta.append((self._step_counter, now_t))
         self._sync_line()
 
+    def set_max_len(self, max_len: int, max_age_s: float = None):
+        from collections import deque
+        self.max_len = max(2, int(max_len))
+        if max_age_s is not None:
+            self.max_age_s = float(max_age_s)
+        self.pts = deque(list(self.pts)[-self.max_len:], maxlen=self.max_len)
+        self._pts_meta = deque(list(self._pts_meta)[-self.max_len:], maxlen=self.max_len)
+        self.jump_pts = deque(list(self.jump_pts)[-self.max_len:], maxlen=self.max_len)
+        self._jump_meta = deque(list(self._jump_meta)[-self.max_len:], maxlen=self.max_len)
+        self.djump_pts = deque(list(self.djump_pts)[-self.max_len:], maxlen=self.max_len)
+        self._djump_meta = deque(list(self._djump_meta)[-self.max_len:], maxlen=self.max_len)
+        ref_t = self._pts_meta[-1][1] if self._pts_meta else self._time_fn()
+        self._evict_expired(ref_t)
+        self._sync_line()
+        self._sync_jump_scatter()
+        self._sync_djump_scatter()
+
     def clear(self):
         self.pts.clear()
         self._pts_meta.clear()

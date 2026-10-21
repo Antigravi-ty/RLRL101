@@ -36,12 +36,15 @@ def _install_headless_qt_mocks():
             self.clicked = _DummySignal()
             self.currentTextChanged = _DummySignal()
             self.currentIndexChanged = _DummySignal()
+            self.textChanged = _DummySignal()
             self.valueChanged = _DummySignal()
             self.toggled = _DummySignal()
+            self.accepted = _DummySignal()
+            self.rejected = _DummySignal()
             self.timeout = _DummySignal()
             self.opts = {"distance": 2500.0, "elevation": 20.0, "azimuth": 45.0, "fov": 60.0}
             self._items = []
-            self._text = ""
+            self._text = str(args[0]) if len(args) == 1 and isinstance(args[0], str) else ""
             self._visible = True
             self._val = 0.0
             self._checked = True
@@ -51,6 +54,9 @@ def _install_headless_qt_mocks():
 
         def __call__(self, *args, **kwargs):
             return _DummyWidget(*args, **kwargs)
+
+        def __or__(self, other):
+            return self
 
         def __getattr__(self, name):
             return _DummyWidget()
@@ -64,6 +70,7 @@ def _install_headless_qt_mocks():
 
         def setText(self, text):
             self._text = str(text)
+            self.textChanged.emit(self._text)
 
         def text(self):
             return self._text
@@ -622,11 +629,60 @@ def verify_tuner_headless():
     w_1v1.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_0))
     assert w_1v1.env.focused_car_idx == 1
 
+    # 11. Verify RocketSim keyword callbacks (_on_touch with data=..., _on_boost_pickup with boost_pad=..., data=...)
+    import RocketSim as rs
+    cs0 = w_nexto.env.cars[0].get_state()
+    cs0.pos = rs.Vec(0.0, -45.0, 93.0)
+    cs0.vel = rs.Vec(0.0, 1200.0, 0.0)
+    w_nexto.env.cars[0].set_state(cs0)
+    pad0_pos = w_nexto.env.pads[0].get_pos()
+    cs1 = w_nexto.env.cars[1].get_state()
+    cs1.pos = rs.Vec(float(pad0_pos.x), float(pad0_pos.y), 17.0)
+    cs1.boost = 10.0
+    w_nexto.env.cars[1].set_state(cs1)
+    w_nexto.auto_session._step_once()
+    assert w_nexto.env._touched_by_car[0] is True, "Expected car 0 ball touch callback to fire without TypeError"
+    assert w_nexto.env._boost_pickups_by_car[1] >= 1, "Expected car 1 boost pad pickup callback to fire without TypeError"
+
+    # 12. Verify trail duration adjustment (e.g. 600 -> 100) + synchronized dynamic X-axis origin tracking + graph toggle (G / \)
+    from vis.tuner.window_views import parse_trail_duration_spec, TrailDurationDialog
+    ok_100, fr_100, _ = parse_trail_duration_spec("100")
+    assert ok_100 and fr_100 == 100
+    ok_sec, fr_sec, _ = parse_trail_duration_spec("1.5s")
+    assert ok_sec and fr_sec == 180
+    dlg_dur = TrailDurationDialog(w_nexto, current_frames=600)
+    dlg_dur.edit.setText("100")
+    assert dlg_dur.frames_value() == 100
+
+    # Step 150 frames and shorten duration to 100 -> buffer and graph X-axis must dynamically track [51, 151]
+    for _ in range(150):
+        w_nexto.auto_session._step_once()
+    w_nexto._set_trail_duration(100)
+    assert w_nexto.trail_duration == 100
+    assert w_nexto.auto_session.max_buffer_frames == 100
+    assert len(w_nexto.auto_session.frames) == 100
+    assert w_nexto.multi_car_renderer.max_trail_len == 100
+    assert w_nexto.plot.max_window == 100
+    assert w_nexto.obs_panel.max_window == 100
+    expected_x0 = float(w_nexto.auto_session.frames[0]["i"])
+    expected_x1 = float(w_nexto.auto_session.frames[-1]["i"])
+    assert expected_x0 > 40.0 and w_nexto.plot.last_x_range == (expected_x0, expected_x1), (
+        f"Expected dynamic X-range {(expected_x0, expected_x1)}, got {w_nexto.plot.last_x_range}"
+    )
+
+    # Verify G toggles bottom graph visibility off/on for larger arena view
+    assert w_nexto.plot_visible is True and w_nexto.plot_widget.isVisible() is True
+    w_nexto.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_G))
+    assert w_nexto.plot_visible is False and w_nexto.plot_widget.isVisible() is False
+    w_nexto.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_G))
+    assert w_nexto.plot_visible is True and w_nexto.plot_widget.isVisible() is True
+
     print(
         f"[verify_tuner] ALL OK! Verified RewardTuner startup, {NUM_CURRICULUM_STEPS} curriculum steps, "
         f"HUD formatting, recording/playback/freerun, plot/obs/flags panels, 3-way Tab ScenarioEditor, "
         f"[Z] Boost/HasJump panel, 3D POV Ball-Cam, SpeedFlip/HalfFlip/DJump presets, MANUAL-RESET instant trajectory on N + replay on R, "
-        f"TrailRenderer synchronized jump/djump expiration, and Nexto (--nexto 6 2 & 1 1) multi-car combat."
+        f"TrailRenderer synchronized jump/djump expiration, Nexto (--nexto 6 2 & 1 1) multi-car combat, "
+        f"RocketSim keyword callbacks, dynamic graph X-axis tracking, [D/U] trail duration resizing (600->100), and [G/\\] graph visibility toggle."
     )
 
 

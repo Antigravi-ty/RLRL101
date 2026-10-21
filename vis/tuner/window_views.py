@@ -149,6 +149,103 @@ class SpawnDistDialog(_QT_BASE_DIALOG):
         return self.edit.text().strip()
 
 
+def parse_trail_duration_spec(spec: str):
+    """解析轨迹与下方图表持续时间输入 (支持直接输入帧数如 '100', '600'，或秒数如 '0.8s', '2.5s')。"""
+    s = str(spec or "").strip().lower()
+    if not s:
+        return False, 600, "❌ 请输入正整数帧数 (如 100, 600) 或秒数 (如 1.5s, 5s)"
+    try:
+        if s.endswith("s"):
+            sec = float(s[:-1].strip())
+            if sec <= 0.0:
+                return False, 600, "❌ 持续秒数必须大于 0"
+            frames = int(round(sec * 120.0))
+        elif s.endswith("f"):
+            frames = int(round(float(s[:-1].strip())))
+        else:
+            frames = int(round(float(s)))
+    except Exception:
+        return False, 600, f"❌ 无法解析 '{spec}'，请输入帧数 (如 100, 300, 600) 或秒数 (如 1.0s)"
+
+    if frames < 10 or frames > 7200:
+        return False, max(10, min(7200, frames)), "❌ 持续帧数范围需在 [10, 7200] 之间 (对应 0.08s ~ 60.0s @ 120Hz)"
+    sec_equiv = frames / 120.0
+    return True, frames, f"✓ 合法 → 轨迹与下方图表窗口 = {frames} 帧 ({sec_equiv:.2f} 秒 @ 120Hz)"
+
+
+class TrailDurationDialog(_QT_BASE_DIALOG):
+    """弹窗动态修改 3D 轨迹持续时间与下方图表 X 轴滚动窗口宽度 (如 600 -> 100)。"""
+
+    def __init__(self, parent, current_frames: int = 600):
+        super().__init__(parent)
+        self.setWindowTitle("调整轨迹与图表持续时间 (Trail & Graph Duration)")
+        self.setMinimumWidth(620)
+        self.setStyleSheet("QDialog { background-color: #f5f5f5; color: #000000; }")
+        layout = QtWidgets.QVBoxLayout(self)
+
+        help_lbl = QtWidgets.QLabel(
+            "修改 3D 车辆轨迹 (含 Jump/DoubleJump 触发点) 与下方图表 X 轴动态滚动窗口的持续时长:\n"
+            "• 直接输入帧数 (120Hz 物理步): 例如输入 100 变为短轨迹 (0.83s)，输入 600 为默认 (5.00s)\n"
+            "• 也支持直接输入带 's' 的秒数: 例如输入 1.5s 自动换算为 180 帧"
+        )
+        help_lbl.setStyleSheet("font-family:Consolas;font-size:12px;color:#000000;background:transparent;")
+        layout.addWidget(help_lbl)
+
+        self.edit = QtWidgets.QLineEdit(str(int(current_frames)))
+        self.edit.setStyleSheet(
+            "font-family:Consolas;font-size:14px;font-weight:bold;"
+            "color:#000000;background-color:#ffffff;border:1px solid #888888;padding:6px;"
+        )
+        layout.addWidget(self.edit)
+
+        self.status_lbl = QtWidgets.QLabel("")
+        self.status_lbl.setStyleSheet("font-family:Consolas;font-size:12px;font-weight:bold;padding:4px;")
+        layout.addWidget(self.status_lbl)
+
+        preset_row = QtWidgets.QHBoxLayout()
+        presets = [
+            ("60帧 (0.5s 极短)", "60"),
+            ("100帧 (0.8s 短轨迹)", "100"),
+            ("180帧 (1.5s)", "180"),
+            ("300帧 (2.5s 中等)", "300"),
+            ("600帧 (5.0s 默认)", "600"),
+            ("1200帧 (10.0s 长轨迹)", "1200"),
+        ]
+        for title, val in presets:
+            btn = QtWidgets.QPushButton(title)
+            btn.setStyleSheet("color:#000000;font-weight:bold;padding:4px 8px;")
+            btn.clicked.connect(lambda _=False, v=val: self.edit.setText(v))
+            preset_row.addWidget(btn)
+        layout.addLayout(preset_row)
+
+        self.btn_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Ok
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        self.btn_box.accepted.connect(self.accept)
+        self.btn_box.rejected.connect(self.reject)
+        layout.addWidget(self.btn_box)
+
+        self.edit.textChanged.connect(self._on_text_changed)
+        self._on_text_changed(self.edit.text())
+        self.edit.selectAll()
+
+    def _on_text_changed(self, txt: str):
+        ok, _, msg = parse_trail_duration_spec(txt)
+        self.status_lbl.setText(msg)
+        if ok:
+            self.status_lbl.setStyleSheet("color:#007a1c;font-family:Consolas;font-size:12px;font-weight:bold;padding:4px;")
+        else:
+            self.status_lbl.setStyleSheet("color:#d92626;font-family:Consolas;font-size:12px;font-weight:bold;padding:4px;")
+        ok_btn = self.btn_box.button(QtWidgets.QDialogButtonBox.StandardButton.Ok)
+        if ok_btn is not None:
+            ok_btn.setEnabled(ok)
+
+    def frames_value(self) -> int:
+        ok, frames, _ = parse_trail_duration_spec(self.edit.text())
+        return frames if ok else 600
+
+
 class ViewsMixin:
     def _save_prefs(self):
         if not hasattr(self, "_qsettings"):
@@ -157,10 +254,62 @@ class ViewsMixin:
         self._qsettings.setValue("obs_group_idx", self.obs_group_idx)
         self._qsettings.setValue("delta_mode", self.delta_mode)
         self._qsettings.setValue("plot_mode", getattr(self, "plot_mode", self._sess().plot_mode))
+        self._qsettings.setValue("trail_duration", int(getattr(self, "trail_duration", 600)))
+        self._qsettings.setValue("plot_visible", bool(getattr(self, "plot_visible", True)))
         if hasattr(self, "view") and hasattr(self.view, "active_mode_key"):
             self._qsettings.setValue("cam_mode", self.view.active_mode_key())
             self._qsettings.setValue("cam_pov_params_v2", self.view.format_current_params("pov"))
             self._qsettings.setValue("cam_center_params", self.view.format_current_params("center"))
+
+    def _set_trail_duration(self, frames_count: int):
+        """同步修改 3D 轨迹持续帧数、会话环形缓冲区与下方图表 X 轴滚动窗口宽度。"""
+        dur = max(10, min(7200, int(frames_count)))
+        self.trail_duration = dur
+        age_s = max(0.05, float(dur) / 120.0)
+
+        for s_obj in (getattr(self, "session", None), getattr(self, "auto_session", None)):
+            if s_obj is not None and hasattr(s_obj, "set_buffer_duration"):
+                s_obj.set_buffer_duration(dur)
+
+        sess = self._sess()
+        if getattr(self, "multi_car_renderer", None) is not None:
+            self.multi_car_renderer.set_max_trail_len(dur, frames=sess.frames if sess else None)
+        if getattr(self, "trail", None) is not None and hasattr(self.trail, "set_max_len"):
+            self.trail.set_max_len(dur, max_age_s=age_s)
+
+        if hasattr(self, "plot") and self.plot is not None:
+            self.plot.set_max_window(dur)
+        if hasattr(self, "obs_panel") and self.obs_panel is not None:
+            self.obs_panel.set_max_window(dur)
+
+        if sess is not None:
+            self._update_plots_from_frames(sess)
+        self._last_rendered_idx = None
+        self._render()
+        self._save_prefs()
+        self._refresh_ui_state(f"⏱ 轨迹与图表时长 → {dur} 帧 ({dur / 120.0:.2f}s @ 120Hz)")
+
+    def _prompt_trail_duration(self):
+        cur_dur = int(getattr(self, "trail_duration", 600))
+        dlg = TrailDurationDialog(self, current_frames=cur_dur)
+        if dlg.exec_() == QtWidgets.QDialog.DialogCode.Accepted:
+            self._set_trail_duration(dlg.frames_value())
+
+    def _toggle_plot_visibility(self):
+        """一键关闭/展开下方图表 (plot_widget)，将垂直空间释放给 3D 球场视野。"""
+        new_vis = not bool(getattr(self, "plot_visible", True))
+        self.plot_visible = new_vis
+        if hasattr(self, "plot_widget") and self.plot_widget is not None:
+            self.plot_widget.setVisible(new_vis)
+        if new_vis:
+            self._update_plots_from_frames(self._sess())
+        self.setFocus()
+        self._save_prefs()
+        msg = (
+            "📊 下方图表已展开 (按 G 或 \\ 关闭图表以扩大球场视野)"
+            if new_vis else "📊 下方图表已关闭，3D 球场视野已最大化 (按 G 或 \\ 恢复图表)"
+        )
+        self._refresh_ui_state(msg)
 
     def _toggle_camera_mode(self):
         if not hasattr(self.view, "toggle_cam_mode"):
@@ -240,7 +389,11 @@ class ViewsMixin:
             self.auto_session.plot_mode = m
         tag = "Δ " if self.delta_mode else ""
         self.mode_label.setText(f"曲线 {m}: {tag}{MODE_NAMES[m]}")
-        self.plot.update_mode(m, self._sess().frames, delta=self.delta_mode)
+        self.plot.update_mode(
+            m, self._sess().frames,
+            delta=self.delta_mode,
+            max_window=getattr(self, "trail_duration", 600),
+        )
         self._save_prefs()
 
     def _cycle_view_mode(self):
@@ -263,7 +416,10 @@ class ViewsMixin:
 
     def _show_flags_view(self):
         self.mode_label.setText("flags 视图（0/1 方波，堆叠显示）")
-        self.obs_panel.update_flags(self._sess().frames)
+        self.obs_panel.update_flags(
+            self._sess().frames,
+            max_window=getattr(self, "trail_duration", 600),
+        )
         self._refresh_hud()
 
     def _set_obs_group(self, idx):
@@ -272,8 +428,11 @@ class ViewsMixin:
         tag = "Δ " if self.delta_mode else ""
         self.mode_label.setText(
             f"obs [{self.obs_group_idx+1}/{len(GROUP_ORDER)}] {tag}{name}")
-        self.obs_panel.update_group(name, self._sess().frames,
-                                     delta=self.delta_mode)
+        self.obs_panel.update_group(
+            name, self._sess().frames,
+            delta=self.delta_mode,
+            max_window=getattr(self, "trail_duration", 600),
+        )
         self._refresh_hud()
         self._save_prefs()
 
@@ -309,9 +468,9 @@ class ViewsMixin:
         sess = self._sess()
         sess.seek(delta)
         if self.view_mode == "reward":
-            self.plot.set_cursor(sess.playback_idx)
+            self.plot.set_cursor(sess.playback_idx, sess.frames)
         else:
-            self.obs_panel.set_cursor(sess.playback_idx)
+            self.obs_panel.set_cursor(sess.playback_idx, sess.frames)
         if sess.frames:
             self._render_frame(sess.frames[sess.playback_idx])
         self._refresh_hud()
@@ -319,18 +478,19 @@ class ViewsMixin:
     def _update_plots_from_frames(self, sess):
         if not sess or not sess.frames:
             return
+        win = getattr(self, "trail_duration", 600)
         if self.view_mode == "reward":
-            self.plot.update_mode(sess.plot_mode, sess.frames, delta=self.delta_mode)
-            self.plot.set_cursor(sess.playback_idx)
+            self.plot.update_mode(sess.plot_mode, sess.frames, delta=self.delta_mode, max_window=win)
+            self.plot.set_cursor(sess.playback_idx, sess.frames)
         elif self.view_mode == "obs":
             self.obs_panel.update_group(
                 GROUP_ORDER[self.obs_group_idx], sess.frames,
-                delta=self.delta_mode,
+                delta=self.delta_mode, max_window=win,
             )
-            self.obs_panel.set_cursor(sess.playback_idx)
+            self.obs_panel.set_cursor(sess.playback_idx, sess.frames)
         else:
-            self.obs_panel.update_flags(sess.frames)
-            self.obs_panel.set_cursor(sess.playback_idx)
+            self.obs_panel.update_flags(sess.frames, max_window=win)
+            self.obs_panel.set_cursor(sess.playback_idx, sess.frames)
 
     def _sync_car_state_panel_from_env(self):
         if not hasattr(self, "car_state_panel") or self.car_state_panel is None:

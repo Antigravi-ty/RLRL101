@@ -38,12 +38,24 @@ class AutoMixin:
 
     def _toggle_auto(self):
         if self.use_auto:
+            from .ui_constants import STATE_DONE, STATE_PLAYBACK
+            if (
+                self.auto_session is not None
+                and self.auto_session.state in (STATE_DONE, STATE_PLAYBACK)
+                and self.auto_session.frames
+                and 0 < self.auto_session.playback_idx < len(self.auto_session.frames) - 1
+            ):
+                self._takeover_from_playback(start_recording=False, step_first_tick=False)
+                return
             self.use_auto = False
             self._pending_reset = None
             cur_plot_mode = getattr(self, "plot_mode", 1)
             self.session.reset(replay_last=True)
             self.session.plot_mode = cur_plot_mode
-            self.trail.clear(); self.plot.clear(); self.obs_panel.clear()
+            self.trail.clear()
+            if hasattr(self.trail, "clear_ghost"):
+                self.trail.clear_ghost()
+            self.plot.clear(); self.obs_panel.clear()
             self._last_rendered_idx = None
             self._refresh_ui_state("HUMAN (同场景重放)")
             return
@@ -64,13 +76,17 @@ class AutoMixin:
 
         self.use_auto = True
         self._pending_reset = None
+        self.session.takeover_info = None
         self.auto_session.plot_mode = cur_plot_mode
         has_same_mode = (self.env.last_spawn_state is not None)
         if not self.auto_reset:
             self._reset_session(replay_last=has_same_mode, force_instant=True)
             return
         self.auto_session.begin_recording(replay_last=has_same_mode)
-        self.trail.clear(); self.plot.clear(); self.obs_panel.clear()
+        self.trail.clear()
+        if hasattr(self.trail, "clear_ghost"):
+            self.trail.clear_ghost()
+        self.plot.clear(); self.obs_panel.clear()
         self._last_rendered_idx = None
         self._refresh_ui_state("MODEL (同场景对比)" if has_same_mode else "MODEL (新场景)")
 
@@ -84,7 +100,7 @@ class AutoMixin:
                 self._refresh_ui_state(f"找不到 {ckpt_path}")
                 return
             try:
-                self._toggle_auto()
+                self.use_auto = False
                 self._toggle_auto()
             except Exception as e:
                 print(f"[tuner] ckpt source '{self.ckpt_source}' load failed: {e}")
@@ -119,7 +135,7 @@ class AutoMixin:
                 self._refresh_ui_state(f"找不到 {ckpt_path}")
                 return
             try:
-                self._toggle_auto()
+                self.use_auto = False
                 self._toggle_auto()
             except Exception as e:
                 print(f"[tuner] prefix '{self.ckpt_prefix}' load failed: {e}")
@@ -163,7 +179,10 @@ class AutoMixin:
         cur_plot_mode = getattr(self, "plot_mode", self.auto_session.plot_mode)
         self.auto_session.plot_mode = cur_plot_mode
         self.auto_session.begin_recording(replay_last=False)
-        self.trail.clear(); self.plot.clear(); self.obs_panel.clear()
+        self.trail.clear()
+        if hasattr(self.trail, "clear_ghost"):
+            self.trail.clear_ghost()
+        self.plot.clear(); self.obs_panel.clear()
         self._last_rendered_idx = None
         self._refresh_ui_state("auto-reset (新场景)")
 

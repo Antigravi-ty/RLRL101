@@ -586,10 +586,59 @@ def verify_tuner_headless():
     w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_F))
     assert w.session.state == STATE_IDLE
 
+    # 10. Verify Mid-Trajectory Takeover (回溯后直接带着用户输入接着 Model 的结果继续跑 & 对比快慢)
+    w.use_auto = True
+    w.auto_reset = False
+    w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_N))
+    assert w.auto_session.state == STATE_DONE
+    model_total_frames = len(w.auto_session.frames)
+    assert model_total_frames > 15, f"Expected model trajectory > 15 frames, got {model_total_frames}"
+
+    # Scrub back 10 frames via Comma (-10)
+    w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_Comma))
+    takeover_idx = w.auto_session.playback_idx
+    assert takeover_idx == model_total_frames - 1 - 10, f"Expected playback_idx={model_total_frames - 11}, got {takeover_idx}"
+    assert len(w.trail.ghost_pts) > 1, "Expected ghost trail to show remaining Model path when scrubbed back"
+
+    # Directly press W + Boost (Period) at the scrubbed frame -> immediately takes over in HUMAN mode and continues from takeover_idx
+    w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_W))
+    w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_Period))
+    assert w.use_auto is False, "Expected use_auto to switch to False (HUMAN takeover) on driving key press"
+    assert w.session.takeover_info is not None, "Expected session.takeover_info to be populated"
+    assert w.session.takeover_info["takeover_idx"] == takeover_idx
+    assert w.session.takeover_info["baseline_len"] == model_total_frames
+    assert w.session.takeover_info["baseline_source"] == "MODEL"
+    assert len(w.session.frames) == takeover_idx + 2, f"Expected prefix ({takeover_idx+1}) + 1 immediate human frame, got {len(w.session.frames)}"
+    assert w.session.frames[takeover_idx]["source"] == "model"
+    assert w.session.frames[takeover_idx + 1]["source"] == "human"
+
+    # Advance a few more human ticks and finish takeover episode
+    for _ in range(5):
+        if w.session.state == STATE_RECORDING:
+            r = w.session._step_once(w.keys)
+            if r:
+                w.session.finish_recording(r)
+                break
+    w.keyReleaseEvent(_FakeKeyEvent(QtCore.Qt.Key_W))
+    w.keyReleaseEvent(_FakeKeyEvent(QtCore.Qt.Key_Period))
+    if w.session.state != STATE_DONE:
+        finish_banner = w.session.finish_recording("touch")
+        w._refresh_ui_state(finish_banner, to_hud=True)
+    assert w.session.state == STATE_DONE
+    _, hud_body = format_hud(w.session, 50.0)
+    assert "中途接管对比" in hud_body and f"Takeover @f={takeover_idx}" in hud_body, "HUD must display takeover comparison section"
+    assert "MODEL" in w.session.format_takeover_short("touch")
+
+    # Press Backspace at the end of takeover run -> rewinds back to takeover_idx on baseline trajectory for retry
+    w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_Backspace))
+    assert w.session.state == STATE_PLAYBACK
+    assert w.session.playback_idx == takeover_idx
+    assert len(w.session.frames) == model_total_frames
+
     print(
         f"[verify_tuner] ALL OK! Verified ReachabilityTuner startup, {NUM_CURRICULUM_STEPS} curriculum steps, "
         f"1s/2s/3s Ground Isochrones (model & rollout), 3D Irregular Smooth Blob, 1/2/3 Camera Slots + Free-Cam Lock, "
-        f"unlimited zero-memory FREERUN, 3-way Tab ScenarioEditor, and [Z] Boost/HasJump panel."
+        f"unlimited zero-memory FREERUN, 3-way Tab ScenarioEditor, [Z] Boost/HasJump panel, and Mid-Trajectory Takeover."
     )
 
 

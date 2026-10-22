@@ -3,7 +3,7 @@ from pyqtgraph.Qt import QtCore, QtWidgets
 
 from core.constants import NUM_CURRICULUM_STAGES
 from .ui_constants import (
-    STATE_IDLE, STATE_PLAYBACK, STATE_DONE, STATE_FREERUN,
+    STATE_IDLE, STATE_RECORDING, STATE_PLAYBACK, STATE_DONE, STATE_FREERUN,
     KEY_MAP, SPEED_STEP,
 )
 from .export import export_frames
@@ -257,6 +257,48 @@ class KeysMixin:
                 self._refresh_ui_state(f"已保存: {os.path.basename(fn)}")
             return
 
+        if k == QtCore.Qt.Key_Backspace and not e.isAutoRepeat():
+            if self.use_auto and sess.state == STATE_RECORDING and sess.frames and hasattr(sess, "complete_remaining"):
+                cur_idx = max(0, len(sess.frames) - 1)
+                sess.complete_remaining()
+                sess.playback_idx = min(cur_idx, max(0, len(sess.frames) - 2))
+                self._takeover_from_playback(start_recording=True, step_first_tick=True)
+                return
+            if sess.state in (STATE_PLAYBACK, STATE_DONE) and sess.frames:
+                if sess.playback_idx < len(sess.frames) - 1:
+                    self._takeover_from_playback(start_recording=True, step_first_tick=True)
+                else:
+                    self._retry_last_takeover()
+                return
+
+        if (
+            self.use_auto
+            and sess.state == STATE_RECORDING
+            and sess.frames
+            and hasattr(sess, "complete_remaining")
+            and k in (
+                QtCore.Qt.Key_Left, QtCore.Qt.Key_Right,
+                QtCore.Qt.Key_BracketLeft, QtCore.Qt.Key_BracketRight,
+                QtCore.Qt.Key_I, QtCore.Qt.Key_Comma, QtCore.Qt.Key_Semicolon,
+                QtCore.Qt.Key_J, QtCore.Qt.Key_Apostrophe,
+            )
+        ):
+            cur_idx = max(0, len(sess.frames) - 1)
+            sess.complete_remaining()
+            sess.playback_idx = cur_idx
+            self._pending_reset = None
+            self._update_plots_from_frames(sess)
+            if k in (QtCore.Qt.Key_J, QtCore.Qt.Key_Apostrophe):
+                sess.state = STATE_PLAYBACK
+                sess.playback_playing = False
+                self._last_rendered_idx = None
+                self._render_frame(sess.frames[sess.playback_idx])
+                self._refresh_hud()
+                self._refresh_ui_state(
+                    f"已暂停 Model @f={sess.playback_idx}/{len(sess.frames)-1} [直接按 WASD/./ / 键接管继续跑!]"
+                )
+                return
+
         if sess.state in (STATE_PLAYBACK, STATE_DONE):
             if k == QtCore.Qt.Key_Left:          self._seek(-1);  return
             if k == QtCore.Qt.Key_Right:         self._seek(+1);  return
@@ -267,6 +309,7 @@ class KeysMixin:
             if k == QtCore.Qt.Key_Comma:         self._seek(-10); return
             if k == QtCore.Qt.Key_Semicolon:     self._seek(+10); return
             if k in (QtCore.Qt.Key_J, QtCore.Qt.Key_Apostrophe):
+                self._pending_reset = None
                 sess.toggle_playback()
                 self._refresh_ui_state(); return
 
@@ -278,6 +321,13 @@ class KeysMixin:
             if free_cam_mask:
                 e.accept(); return
             self.keys[KEY_MAP[k]] = True
+            if sess.state in (STATE_PLAYBACK, STATE_DONE):
+                if not e.isAutoRepeat():
+                    if sess.frames and sess.playback_idx < len(sess.frames) - 1:
+                        self._takeover_from_playback(start_recording=True, step_first_tick=True)
+                    elif self.use_auto:
+                        self._refresh_ui_state("💡 请先按 ← / [ / , / I 回溯到中途某一帧，再按控制键直接接管继续跑!")
+                e.accept(); return
             if not self.use_auto and sess.state == STATE_IDLE:
                 sess.begin_recording()
                 self._refresh_ui_state()

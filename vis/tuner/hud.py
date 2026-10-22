@@ -58,12 +58,53 @@ def _fmt_focus(session):
     return f"[{s_lbl} | Dir5={dir_lbl} | Tier={tier_name}{dist_info}]\n"
 
 
+def _takeover_block(session, fr):
+    ti = getattr(session, "takeover_info", None)
+    if not ti or not isinstance(fr, dict):
+        return ""
+    t_idx = int(ti.get("takeover_idx", 0))
+    b_len = int(ti.get("baseline_len", len(session.frames)))
+    b_src = str(ti.get("baseline_source", "MODEL"))
+    b_reason = str(ti.get("baseline_reason", "touch"))
+    b_rcum = float(ti.get("baseline_r_cum", 0.0))
+    b_frames = ti.get("baseline_frames") or []
+    cur_i = int(fr.get("i", 0))
+    cur_len = len(session.frames)
+    seg_tag = f"{b_src}前段 (0..{t_idx})" if cur_i <= t_idx else f"HUMAN接管段 ({t_idx+1}..)"
+
+    lines = [
+        f"---- 中途接管对比 (Takeover @f={t_idx} vs {b_src}) ----",
+        f"当前帧段: [{seg_tag}]  基准={b_len}f ({b_len/120.0:.2f}s, {b_reason})",
+    ]
+    if 0 <= cur_i < len(b_frames):
+        bf = b_frames[cur_i]
+        b_dist = float(bf.get("dist", 0.0))
+        b_spd = float(bf.get("car_speed", 0.0))
+        d_diff = float(fr.get("dist", 0.0)) - b_dist
+        s_diff = float(fr.get("car_speed", 0.0)) - b_spd
+        lead_tag = "领先(更近)" if d_diff < -0.5 else ("落后(更远)" if d_diff > 0.5 else "持平")
+        lines.append(
+            f"同帧对比(f={cur_i}): Δdist={d_diff:+.1f}uu ({lead_tag}) | Δspd={s_diff:+.1f}"
+        )
+    if session.state in (STATE_PLAYBACK, STATE_DONE):
+        short = session.format_takeover_short() if hasattr(session, "format_takeover_short") else ""
+        seg_h = max(0, cur_len - 1 - t_idx)
+        seg_b = max(0, b_len - 1 - t_idx)
+        lines.append(
+            f"结算成绩: 总 {cur_len}f vs {b_len}f (接管后 {seg_h}f vs {seg_b}f) | r_cum={session.r_cum:+.2f} vs {b_rcum:+.2f}"
+        )
+        if short:
+            lines.append(f"结论: {short}")
+    return "\n".join(lines) + "\n"
+
+
 def format_hud(session, current_boost, obs_group=None):
     boost_line = f"BOOST: {current_boost:5.1f}"
     frames = session.frames
     is_auto = _is_auto(session)
     focus_str = _fmt_focus(session)
     rec_limit = getattr(session.env, "current_max_decisions", MAX_DECISIONS) * TICKS_PER_DECISION
+    ti = getattr(session, "takeover_info", None)
 
     if session.state in (STATE_PLAYBACK, STATE_DONE) and frames:
         fr = frames[session.playback_idx]
@@ -75,9 +116,10 @@ def format_hud(session, current_boost, obs_group=None):
         car_spd = fr.get("car_speed", 0.0)
         keys_str = fr["input"].get("keys_str", "")
         ch_list  = fr["input"].get("ppo_channels", [])
+        src_tag = f" [{fr.get('source', 'human').upper()}]" if ti else ""
         body = (
             f"{focus_str}"
-            f"{'AUTO' if is_auto else 'PLAYBACK'}  "
+            f"{'AUTO' if is_auto else 'PLAYBACK'}{src_tag}  "
             f"i={fr['i']}/{len(frames)-1} (max={rec_limit}f)  "
             f"速度 {int(session.speed*100)}%\n"
             f"keys:  [{keys_str}]  ch={ch_list}\n"
@@ -109,10 +151,12 @@ def format_hud(session, current_boost, obs_group=None):
             f"r_total    = {fr['r_total']:+8.3f}\n"
             f"r_cum      = {fr['r_cum']:+8.3f}\n"
         )
+        if ti:
+            body += _takeover_block(session, fr)
         body += _fmt_flags(fr)
         if obs_group:
             body += _fmt_obs_group(fr, obs_group)
-        if is_auto:
+        if is_auto or (isinstance(fr, dict) and fr.get("ppo_probs") is not None):
             body += _model_block(session, fr)
         return boost_line, body
 
@@ -121,14 +165,17 @@ def format_hud(session, current_boost, obs_group=None):
         closing = fr.get("closing", 0.0)
         car_spd = fr.get("car_speed", 0.0)
         keys_str = fr["input"].get("keys_str", "")
+        state_hdr = "AUTO" if is_auto else ("TAKEOVER" if ti else "RECORDING")
         body = (
             f"{focus_str}"
-            f"{'AUTO' if is_auto else 'RECORDING'}  "
+            f"{state_hdr}  "
             f"i={fr['i']}/{rec_limit}  r_cum={fr['r_cum']:+.3f}\n"
             f"keys: [{keys_str}]\n"
             f"dist={fr['dist']:.1f}  spd={car_spd:.1f}  closing={closing:+.1f}\n"
             f"boost={fr['boost']:.1f}  air={fr['air_time']:.2f}  flip={int(fr['is_flipping'])}\n"
         )
+        if ti:
+            body += _takeover_block(session, fr)
         body += _fmt_flags(fr)
         if obs_group:
             body += _fmt_obs_group(fr, obs_group)

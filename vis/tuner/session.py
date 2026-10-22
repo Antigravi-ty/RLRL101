@@ -43,6 +43,8 @@ class Session:
         self.prev_snap = None
         self._prev_boost = None
         self._last_time = None
+        self.last_finish_reason = None
+        self.takeover_info = None
         self.speed = getattr(self, "speed", 1.0)
         self.plot_mode = getattr(self, "plot_mode", 1)
 
@@ -51,6 +53,44 @@ class Session:
         self._raw_min = None
         self._raw_max = None
         self._freerun_steps = 0
+
+    def restore_from_frames(self, prefix_frames, start_recording=True, takeover_info=None):
+        """Restores the exact RocketSim physics and session state up to prefix_frames[-1] for mid-trajectory human takeover."""
+        import RocketSim as rs
+        if not prefix_frames:
+            self.reset(replay_last=True)
+            return
+
+        spawn_sd = prefix_frames[0].get("spawn_state") or self.env.last_spawn_state
+        self.env.reset(replay_last=True, spawn_state=spawn_sd)
+        for f in prefix_frames:
+            inp = f.get("input") or {}
+            ctrl = rs.CarControls()
+            ctrl.throttle = float(inp.get("thr", 0.0))
+            ctrl.steer = float(inp.get("str", 0.0))
+            ctrl.pitch = float(inp.get("ptc", 0.0))
+            ctrl.yaw = float(inp.get("yaw", 0.0))
+            ctrl.roll = float(inp.get("roll", 0.0))
+            ctrl.jump = bool(inp.get("jump", False))
+            ctrl.boost = bool(inp.get("boost", False))
+            ctrl.handbrake = bool(inp.get("handbrake", False))
+            self.env.step_tick(ctrl)
+
+        self.env.get_obs()
+        self.cfg.max_decisions = getattr(self.env, "ep_max_decisions", MAX_DECISIONS)
+        self.frames = [dict(f) for f in prefix_frames]
+        for idx_i, fr_i in enumerate(self.frames):
+            fr_i["i"] = idx_i
+        self.playback_idx = len(self.frames) - 1
+        self.playback_playing = False
+        self.r_cum = float(self.frames[-1].get("r_cum", 0.0))
+        self.prev_snap = self.env.snapshot()
+        self._prev_boost = float(self.prev_snap["boost"])
+        self._last_time = None
+        self.last_finish_reason = None
+        if takeover_info is not None:
+            self.takeover_info = dict(takeover_info)
+        self.state = STATE_RECORDING if start_recording else STATE_IDLE
 
     def begin_recording(self):
         self.state = STATE_RECORDING
@@ -177,9 +217,56 @@ class Session:
             return "touch" if touched else "timeout"
         return None
 
+    def format_takeover_short(self, reason=None):
+        ti = getattr(self, "takeover_info", None)
+        if not ti:
+            return ""
+        r_str = str(reason or getattr(self, "last_finish_reason", None) or "done")
+        b_len = int(ti.get("baseline_len", len(self.frames)))
+        b_reason = str(ti.get("baseline_reason", "touch"))
+        b_src = str(ti.get("baseline_source", "MODEL"))
+        cur_len = len(self.frames)
+        diff_f = cur_len - b_len
+        diff_s = diff_f / PHYSICS_HZ
+        if r_str == "touch" and b_reason == "touch":
+            if diff_f < 0:
+                return f"🏆 比{b_src}快 {-diff_f}帧 ({-diff_s:.2f}s)! [{cur_len}f vs {b_len}f]"
+            elif diff_f == 0:
+                return f"🤝 与{b_src}速度持平! [{cur_len}f vs {b_len}f]"
+            else:
+                return f"🐢 比{b_src}慢 +{diff_f}帧 (+{diff_s:.2f}s) [{cur_len}f vs {b_len}f]"
+        elif r_str == "touch" and b_reason != "touch":
+            return f"🏆 接管成功触球 ({cur_len}f)! ({b_src}原轨 {b_reason})"
+        elif r_str != "touch" and b_reason == "touch":
+            return f"❌ 接管{r_str} ({cur_len}f) vs {b_src} {b_len}f触球"
+        return f"对比{b_src}: {cur_len}f vs {b_len}f ({diff_f:+d}f)"
+
+    def format_takeover_result(self, reason=None):
+        ti = getattr(self, "takeover_info", None)
+        r_str = str(reason or getattr(self, "last_finish_reason", None) or "done")
+        if not ti:
+            return (f"完成 ({r_str})  {len(self.frames)} 帧 / "
+                    f"累计 {self.r_cum:+.2f}  [J 回放 / R 重置]")
+        t_idx = int(ti.get("takeover_idx", 0))
+        b_len = int(ti.get("baseline_len", len(self.frames)))
+        b_src = str(ti.get("baseline_source", "MODEL"))
+        cur_len = len(self.frames)
+        seg_h = max(0, cur_len - 1 - t_idx)
+        seg_b = max(0, b_len - 1 - t_idx)
+        short = self.format_takeover_short(r_str)
+        return (
+            f"完成 ({r_str}) [中途接管 @f={t_idx}]  "
+            f"总 {cur_len}帧({cur_len/PHYSICS_HZ:.2f}s) vs {b_src} {b_len}帧({b_len/PHYSICS_HZ:.2f}s) "
+            f"(接管后 {seg_h}f vs {seg_b}f) | {short} | "
+            f"累计 {self.r_cum:+.2f}  [Backspace 回到接管点 / ←→ 回溯 / M 切Model]"
+        )
+
     def finish_recording(self, reason):
         self.state = STATE_DONE
+        self.last_finish_reason = str(reason)
         self.playback_idx = max(0, len(self.frames) - 1)
+        if getattr(self, "takeover_info", None):
+            return self.format_takeover_result(reason)
         return (f"完成 ({reason})  {len(self.frames)} 帧 / "
                 f"累计 {self.r_cum:+.2f}  [J 回放 / R 重置]")
 

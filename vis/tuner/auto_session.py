@@ -53,6 +53,8 @@ class AutoSession(Session):
         self.frames = []
         self.r_cum = 0.0
         self.prev_snap = None
+        self.last_finish_reason = None
+        self.takeover_info = None
         self.env.reset(mode=self.env.mode, replay_last=replay_last, spawn_state=spawn_state)
         self.cfg.max_decisions = getattr(self.env, "ep_max_decisions", MAX_DECISIONS)
         self._last_obs = self.env.last_obs
@@ -60,10 +62,15 @@ class AutoSession(Session):
     def instant_simulate(self, replay_last=False, spawn_state=None) -> str:
         """Instantly simulates the entire episode to completion (touch or timeout) without waiting for real-time ticks."""
         self.begin_recording(replay_last=replay_last, spawn_state=spawn_state)
+        return self.complete_remaining()
+
+    def complete_remaining(self) -> str:
+        """Completes remaining ticks of the current episode so the full model baseline is available for scrubbing/takeover."""
         max_dec = getattr(self.env, "ep_max_decisions", getattr(self.cfg, "max_decisions", MAX_DECISIONS))
         max_ticks = max_dec * TICKS_PER_DECISION + 4
+        rem = max(1, max_ticks - len(self.frames))
         reason = "timeout"
-        for _ in range(max_ticks):
+        for _ in range(rem):
             r = self._step_once({})
             if r:
                 reason = r

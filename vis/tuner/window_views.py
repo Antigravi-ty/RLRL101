@@ -340,14 +340,19 @@ class ViewsMixin:
             self._refresh_ui_state(f"FREERUN 已结束 (共运行 {steps} 步, 未写盘/零内存累积)")
         else:
             sess.frames = []
+            sess.takeover_info = None
             sess.begin_freerun()
             self.trail.clear()
+            if hasattr(self.trail, "clear_ghost"):
+                self.trail.clear_ghost()
             self.plot.clear()
             self.obs_panel.clear()
             self._refresh_ui_state("FREERUN 无限时运行中 (已禁用CSV帧记录防爆内存, 按 F 结束)")
 
     def _seek(self, delta):
+        self._pending_reset = None
         sess = self._sess()
+        sess.playback_playing = False
         sess.seek(delta)
         if self.view_mode == "reward":
             self.plot.set_cursor(sess.playback_idx)
@@ -356,6 +361,146 @@ class ViewsMixin:
         if sess.frames:
             self._render_frame(sess.frames[sess.playback_idx])
         self._refresh_hud()
+        if sess.frames and sess.playback_idx < len(sess.frames) - 1:
+            self._refresh_ui_state(
+                f"回溯 f={sess.playback_idx}/{len(sess.frames)-1} [直接按 WASD/./ / 键从此帧接管继续跑!]"
+            )
+        else:
+            self._refresh_ui_state()
+
+    def _takeover_from_playback(self, start_recording=True, step_first_tick=True):
+        """Takes over mid-trajectory from the current playback_idx with human controls and compares finish speed against the baseline."""
+        from vis import scene as sc
+        sess = self._sess()
+        if sess is None or not sess.frames:
+            return False
+        idx = int(max(0, min(sess.playback_idx, len(sess.frames) - 1)))
+        if idx >= len(sess.frames) - 1:
+            return False
+
+        self._pending_reset = None
+        cur_spawn_id = (sess.frames[0].get("spawn_state") or {}).get("spawn_id") or getattr(self.env, "spawn_id", "")
+        prev_ti = getattr(self.session, "takeover_info", None)
+        if (not self.use_auto) and prev_ti is not None and prev_ti.get("spawn_id") == cur_spawn_id:
+            base_frames = list(prev_ti.get("baseline_frames") or sess.frames)
+            base_len = int(prev_ti.get("baseline_len", len(base_frames)))
+            base_reason = str(prev_ti.get("baseline_reason", "touch"))
+            base_r_cum = float(prev_ti.get("baseline_r_cum", base_frames[-1]["r_cum"] if base_frames else 0.0))
+            base_src = str(prev_ti.get("baseline_source", "MODEL"))
+        else:
+            base_frames = [dict(f) for f in sess.frames]
+            base_len = len(base_frames)
+            last_fr = base_frames[-1]
+            base_reason = getattr(sess, "last_finish_reason", None)
+            if not base_reason:
+                base_reason = "touch" if float(last_fr.get("detail", {}).get("r_touch", 0.0)) > 0.0 else "timeout"
+            base_r_cum = float(last_fr.get("r_cum", 0.0))
+            base_src = "MODEL" if (self.use_auto or last_fr.get("source") == "model") else "HUMAN"
+
+        prefix_frames = [dict(f) for f in sess.frames[:idx + 1]]
+        takeover_info = {
+            "takeover_idx": idx,
+            "baseline_len": base_len,
+            "baseline_reason": base_reason,
+            "baseline_r_cum": base_r_cum,
+            "baseline_source": base_src,
+            "baseline_frames": base_frames,
+            "spawn_id": cur_spawn_id,
+        }
+
+        cur_plot_mode = getattr(self, "plot_mode", self.session.plot_mode)
+        self.use_auto = False
+        self.session.plot_mode = cur_plot_mode
+        self.session.restore_from_frames(
+            prefix_frames,
+            start_recording=start_recording,
+            takeover_info=takeover_info,
+        )
+
+        self.trail.clear()
+        start_t = max(0, idx - 800)
+        for i in range(start_t, idx + 1):
+            f = self.session.frames[i]
+            prev_f = self.session.frames[i - 1] if i > 0 else None
+            b_used = float(f.get("boost_used", 0.0))
+            boosting = 1.0 if (b_used > 0.001 or (prev_f is not None and f["boost"] < prev_f["boost"] - 0.005)) else 0.0
+            fl = f.get("flags") or {}
+            jumping = bool(fl.get("is_jumping", False))
+            djump_or_flip = bool(fl.get("has_djump", False) or fl.get("is_flipping", False) or f.get("is_flipping", False))
+            self.trail.push(sc.r2r(f["car_pos"]), boosting=boosting, jumping=jumping, djump_or_flip=djump_or_flip)
+
+        if hasattr(self.trail, "set_ghost"):
+            if idx < len(base_frames) - 1:
+                self.trail.set_ghost([sc.r2r(f["car_pos"]) for f in base_frames[idx:]])
+            else:
+                self.trail.clear_ghost()
+
+        finish_msg = None
+        if start_recording and step_first_tick:
+            free_cam_mask = (
+                getattr(self.view, "cam_mode", "center") == "free"
+                and not getattr(self.view, "free_cam_locked", False)
+            )
+            eff_keys = {k: False for k in self.keys} if free_cam_mask else self.keys
+            reason = self.session._step_once(eff_keys)
+            self.session._last_time = _time.time()
+            if reason:
+                finish_msg = self.session.finish_recording(reason)
+
+        self._update_plots_from_frames(self.session)
+        self._last_rendered_idx = None
+        self._render()
+
+        if finish_msg:
+            self._refresh_ui_state(finish_msg, to_hud=True)
+        elif start_recording:
+            self._refresh_ui_state(
+                f"🔥 已从 f={idx} 接管! 正在继续跑 (目标: {base_src} {base_len}帧/{base_len/120.0:.2f}s {base_reason})"
+            )
+        else:
+            self._refresh_ui_state(
+                f"🎯 已在 f={idx} 就绪接管! 按 WASD/./ / 键直接接着跑 (目标: {base_src} {base_len}帧/{base_len/120.0:.2f}s)"
+            )
+        return True
+
+    def _retry_last_takeover(self):
+        """Rewinds back to the last takeover point on the baseline trajectory so the user can immediately retry or adjust the takeover frame."""
+        sess = self._sess()
+        ti = getattr(self.session, "takeover_info", None)
+        if ti and ti.get("baseline_frames"):
+            base_frames = [dict(f) for f in ti["baseline_frames"]]
+            t_idx = int(max(0, min(ti.get("takeover_idx", 0), len(base_frames) - 2)))
+            self._pending_reset = None
+            self.use_auto = False
+            self.session.frames = base_frames
+            self.session.state = STATE_PLAYBACK
+            self.session.playback_playing = False
+            self.session.playback_idx = t_idx
+            self.session.r_cum = float(base_frames[-1].get("r_cum", 0.0))
+            self.session.last_finish_reason = str(ti.get("baseline_reason", "touch"))
+            self._update_plots_from_frames(self.session)
+            self._last_rendered_idx = None
+            self._render_frame(self.session.frames[t_idx])
+            self._refresh_hud()
+            self._refresh_ui_state(
+                f"⏪ 已回到接管点 f={t_idx}/{len(base_frames)-1} [直接按 WASD/./ / 键重新接管，或按 ←→ 微调接管帧]"
+            )
+            return True
+        if sess is not None and len(sess.frames) > 1:
+            back_idx = max(0, len(sess.frames) - min(30, max(2, len(sess.frames) // 2)))
+            self._pending_reset = None
+            sess.state = STATE_PLAYBACK
+            sess.playback_playing = False
+            sess.playback_idx = back_idx
+            self._update_plots_from_frames(sess)
+            self._last_rendered_idx = None
+            self._render_frame(sess.frames[back_idx])
+            self._refresh_hud()
+            self._refresh_ui_state(
+                f"⏪ 已回溯至 f={back_idx}/{len(sess.frames)-1} [用 ←→/[/] 选定位置，直接按 WASD/./ / 键接管继续跑!]"
+            )
+            return True
+        return False
 
     def _update_plots_from_frames(self, sess):
         if not sess or not sess.frames:
@@ -441,10 +586,13 @@ class ViewsMixin:
         cur_plot_mode = getattr(self, "plot_mode", int(self._qsettings.value("plot_mode", 1)))
         self.plot_mode = cur_plot_mode
         self.session.plot_mode = cur_plot_mode
+        self.session.takeover_info = None
         if self.auto_session is not None:
             self.auto_session.plot_mode = cur_plot_mode
 
         self.trail.clear()
+        if hasattr(self.trail, "clear_ghost"):
+            self.trail.clear_ghost()
         self.plot.clear()
         self._last_rendered_idx = None
         self.obs_panel.clear()
@@ -553,6 +701,8 @@ class ViewsMixin:
                 self.view._temp_pov_azim = 0.0
                 self.view._temp_pov_elev = 0.0
             self.trail.clear()
+            if hasattr(self.trail, "clear_ghost"):
+                self.trail.clear_ghost()
             self.plot.clear()
             self.obs_panel.clear()
             self._last_rendered_idx = None
@@ -600,7 +750,12 @@ class ViewsMixin:
 
         if to_hud:
             self._hud_extra = str(extra) if extra else ""
-            extra_short = ""
+            if getattr(sess, "takeover_info", None) and hasattr(sess, "format_takeover_short"):
+                extra_short = sess.format_takeover_short()
+            else:
+                extra_short = ""
+            if hasattr(self, "_refresh_hud"):
+                self._refresh_hud()
         else:
             extra_short = extra
 
@@ -621,10 +776,22 @@ class ViewsMixin:
                 "color:#f0f;font-size:16px;font-weight:bold;"
                 "background:#000;padding:6px;border:2px solid #f0f;")
         else:
-            self.mode_indicator.setText(f"HUMAN [P{s_idx} | {dist_raw} | CAM:{cam_tag}]")
-            self.mode_indicator.setStyleSheet(
-                "color:#0fc;font-size:16px;font-weight:bold;"
-                "background:#000;padding:6px;border:2px solid #0fc;")
+            ti = getattr(self.session, "takeover_info", None)
+            if ti:
+                t_idx = int(ti.get("takeover_idx", 0))
+                b_len = int(ti.get("baseline_len", 0))
+                b_src = str(ti.get("baseline_source", "MODEL"))
+                self.mode_indicator.setText(
+                    f"HUMAN (TAKEOVER @f={t_idx} vs {b_src} {b_len}f) [P{s_idx} | {dist_raw} | CAM:{cam_tag}]"
+                )
+                self.mode_indicator.setStyleSheet(
+                    "color:#0ff;font-size:16px;font-weight:bold;"
+                    "background:#000;padding:6px;border:2px solid #0ff;")
+            else:
+                self.mode_indicator.setText(f"HUMAN [P{s_idx} | {dist_raw} | CAM:{cam_tag}]")
+                self.mode_indicator.setStyleSheet(
+                    "color:#0fc;font-size:16px;font-weight:bold;"
+                    "background:#000;padding:6px;border:2px solid #0fc;")
 
         if self.use_auto:
             if self.auto_reset:
@@ -638,10 +805,17 @@ class ViewsMixin:
                     "color:#fa0;font-size:14px;font-weight:bold;"
                     "background:#000;padding:4px;border:2px solid #fa0;")
         else:
-            self.reset_indicator.setText("—")
-            self.reset_indicator.setStyleSheet(
-                "color:#555;font-size:14px;font-weight:bold;"
-                "background:#000;padding:4px;border:2px solid #555;")
+            ti = getattr(self.session, "takeover_info", None)
+            if ti:
+                self.reset_indicator.setText(f"TAKEOVER @f={ti.get('takeover_idx', 0)} (Backspace重试)")
+                self.reset_indicator.setStyleSheet(
+                    "color:#0ff;font-size:14px;font-weight:bold;"
+                    "background:#000;padding:4px;border:2px solid #0ff;")
+            else:
+                self.reset_indicator.setText("—")
+                self.reset_indicator.setStyleSheet(
+                    "color:#555;font-size:14px;font-weight:bold;"
+                    "background:#000;padding:4px;border:2px solid #555;")
 
         is_edit = getattr(self, "editor", None) is not None and self.editor.active
         color = "#ff0" if is_edit else {

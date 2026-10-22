@@ -325,7 +325,7 @@ class UIMixin:
             "可达集: 地面1s(青绿)/2s(金黄)/3s(洋红)等时线(Boost=0)  |  K 切换[神经网络极速模型(0.1ms) ↔ 物理实时推演]  |  F 无限时FREERUN(禁CSV防爆内存)\n"
             "录制: WASD  /(jump)  .(boost)  Shift(slide)  Q/E(roll)  |  X: 手动摆靶/摆车/发球  |  Z: 展开Boost/HasJump面板\n"
             "编辑(X下): Tab切 [车头方向 / init速度方向 / 手动发球(聚焦于球)]  WASD平移  /.高度  左键拖方向  [/]调速  T发射\n"
-            "回放: ←→(±1)  [ ](±30)  I/K(±60)  ,( -10)  ;(+10)  J 或 ' 播放/暂停  |  R 逐步重放  N 新场景  M 切 HUMAN/MODEL"
+            "回放与中途接管: ←→(±1) [ ](±30) I/K(±60) ,/;(±10) J/' 播放/暂停 | 回溯后直接按 WASD/./ / 键从当前帧接管继续跑(Backspace重试接管点) | R重放 N新场景 M切HUMAN/MODEL"
         )
         self.help = WrapAnywhereLabel(help_txt)
         self.help.setStyleSheet("color:#ffcc00;background:#111;padding:6px;"

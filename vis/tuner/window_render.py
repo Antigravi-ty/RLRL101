@@ -259,6 +259,17 @@ class RenderMixin:
             djump_or_flip = bool(fl.get("has_djump", False) or fl.get("is_flipping", False) or f.get("is_flipping", False))
             self.trail.push(sc.r2r(f["car_pos"]), boosting=boosting, jumping=jumping, djump_or_flip=djump_or_flip)
 
+        if hasattr(self.trail, "set_ghost"):
+            ti = getattr(sess, "takeover_info", None)
+            if ti and ti.get("baseline_frames"):
+                bf = ti["baseline_frames"]
+                t_idx = int(ti.get("takeover_idx", 0))
+                self.trail.set_ghost([sc.r2r(f["car_pos"]) for f in bf[t_idx:]])
+            elif sess.playback_idx < len(sess.frames) - 1:
+                self.trail.set_ghost([sc.r2r(f["car_pos"]) for f in sess.frames[sess.playback_idx:]])
+            else:
+                self.trail.clear_ghost()
+
         self.axes.update(pos_r, fwd_r, up_r, rgt_r)
         sc.update_pad_colors(self.big_pads, self.small_pads,
                              self.big_idx, self.small_idx, self.pads_ref)

@@ -508,6 +508,9 @@ class TrailRenderer:
     """Renders 3D trajectory trail (Cyan=coasting, Gold=boost) + rising-edge impulse dots for Jump & DoubleJump/Flip."""
 
     def __init__(self, view, max_len=600):
+        self.ghost_line = gl.GLLinePlotItem(antialias=True)
+        self.ghost_line.setData(pos=np.zeros((0, 3), dtype=np.float32))
+        view.addItem(self.ghost_line)
         self.line = gl.GLLinePlotItem(antialias=True)
         view.addItem(self.line)
         self.jump_scatter = gl.GLScatterPlotItem()
@@ -518,11 +521,28 @@ class TrailRenderer:
         view.addItem(self.djump_scatter)
 
         self.pts = []
+        self.ghost_pts = np.zeros((0, 3), dtype=np.float32)
         self.jump_pts = []
         self.djump_pts = []
         self._prev_jumping = False
         self._prev_djump = False
         self.max_len = max_len
+
+    def set_ghost(self, pts_r):
+        if pts_r is None or len(pts_r) < 2:
+            self.clear_ghost()
+            return
+        arr = np.asarray(pts_r, dtype=np.float32)[:, :3]
+        self.ghost_pts = arr
+        self.ghost_line.setData(
+            pos=arr,
+            color=(0.88, 0.32, 1.0, 0.48),
+            width=3,
+        )
+
+    def clear_ghost(self):
+        self.ghost_pts = np.zeros((0, 3), dtype=np.float32)
+        self.ghost_line.setData(pos=self.ghost_pts)
 
     def push(self, xyz, boosting=0.0, jumping=False, djump_or_flip=False):
         b_flag = 1.0 if float(boosting) > 0.5 else 0.0

@@ -190,3 +190,60 @@ class AutoMixin:
         use_inst = bool(self.use_auto and (not self.auto_reset))
         self._reset_session(replay_last=True, force_instant=use_inst)
         self._refresh_ui_state(f"策略推理 = {mode_str}")
+
+    def _takeover_from_current_frame(self, start_immediately: bool = False) -> bool:
+        """回溯后中途人工接管: 从当前回放帧 (或正在运行的帧) 恢复双车物理状态，切换为 HUMAN 接管继续跑，并对比原轨迹快慢。"""
+        sess = self._sess()
+        if sess is None or not sess.frames:
+            self._refresh_ui_state("当前无轨迹可接管，请先跑完或回溯一段轨迹")
+            return False
+
+        from .ui_constants import STATE_PLAYBACK, STATE_DONE, STATE_RECORDING
+        from .session import summarize_trajectory_outcome
+
+        if sess.state in (STATE_PLAYBACK, STATE_DONE):
+            target_idx = int(sess.playback_idx)
+        elif sess.state == STATE_RECORDING:
+            target_idx = max(0, len(sess.frames) - 1)
+        else:
+            target_idx = int(sess.playback_idx)
+
+        # 若正好停在最后一帧 (已触球结束帧)，默认自动回退 1 帧以便能继续操作；但通常用户已用 ←/I/[ 回溯到中途帧
+        if target_idx >= len(sess.frames) - 1 and len(sess.frames) > 1:
+            last_w = sess.frames[-1].get("winner_car_idx")
+            if last_w is not None:
+                target_idx = max(0, len(sess.frames) - 2)
+
+        src_frames = list(sess.frames)
+        ref_bench = getattr(sess, "ref_benchmark", None) or summarize_trajectory_outcome(src_frames)
+
+        self._pending_reset = None
+        self.use_auto = False
+        cur_plot_mode = getattr(self, "plot_mode", 1)
+        self._sync_human_opp_model()
+        self.session.plot_mode = cur_plot_mode
+        resumed_idx = self.session.resume_from_frames(
+            src_frames,
+            up_to_idx=target_idx,
+            ref_benchmark=ref_bench,
+            start_immediately=start_immediately,
+        )
+
+        f_idx = int(getattr(self.env, "focused_car_idx", 0))
+        if getattr(self, "multi_car_renderer", None) is not None:
+            self.multi_car_renderer.render_playback_frame(
+                self.session.frames, resumed_idx, focused_idx=f_idx
+            )
+        self._update_plots_from_frames(self.session)
+        self._last_rendered_idx = None
+        self._render()
+
+        ref_f = ref_bench["frames"] if ref_bench else len(src_frames)
+        sec_t = (resumed_idx + 1) / 120.0
+        state_hint = "已接管继续狂飙!" if start_immediately else "按任一操作键(WASD/./Shift)立即发车冲刺!"
+        self._refresh_ui_state(
+            f"⚡ 中途接管 @{resumed_idx}f ({sec_t:.2f}s) | 目标击败原轨迹 {ref_f}f ({ref_f/120.0:.2f}s) — {state_hint}",
+            to_hud=False,
+        )
+        return True
+

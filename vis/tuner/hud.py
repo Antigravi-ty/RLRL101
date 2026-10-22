@@ -73,12 +73,28 @@ def _fmt_focus(session):
     return f"[KO{slot}:{slot_name} | 悬挂稳定={settle}f | 视角车 {lbl}{lock_tag}]\n"
 
 
+def _fmt_takeover(session):
+    tk = getattr(session, "takeover_step", None)
+    if tk is None:
+        return ""
+    ref = getattr(session, "ref_benchmark", None) or {}
+    ref_f = ref.get("frames")
+    if ref_f:
+        cur_f = len(session.frames)
+        df = cur_f - ref_f
+        return (
+            f"⚡ 中途接管模式: 接管帧={tk} ({tk/120.0:.2f}s) | "
+            f"原轨迹耗时={ref_f}f ({ref_f/120.0:.2f}s) | 当前={cur_f}f ({df:+d}f)\n"
+        )
+    return f"⚡ 中途接管模式: 接管帧={tk} ({tk/120.0:.2f}s)\n"
+
+
 def format_hud(session, current_boost, obs_group=None):
     lbl = session.env.car_label() if hasattr(session.env, "car_label") else "#1 BLUE"
     boost_line = f"{lbl}  BOOST: {current_boost:5.1f}"
     frames = session.frames
     is_auto = _is_auto(session)
-    focus_str = _fmt_focus(session)
+    focus_str = _fmt_focus(session) + _fmt_takeover(session)
 
     if session.state in (STATE_PLAYBACK, STATE_DONE) and frames:
         fr = frames[session.playback_idx]
@@ -92,9 +108,10 @@ def format_hud(session, current_boost, obs_group=None):
         ch_list  = fr["input"].get("ppo_channels", [])
         sec_i = fr["i"] / 120.0
         sec_tot = len(frames) / 120.0
+        src_lbl = "MODEL 1v1" if is_auto else ("HUMAN TAKEOVER" if getattr(session, "takeover_step", None) is not None else "HUMAN PLAYBACK")
         body = (
             f"{focus_str}"
-            f"{'MODEL 1v1' if is_auto else 'HUMAN PLAYBACK'}  "
+            f"{src_lbl}  "
             f"i={fr['i']}/{len(frames)-1} ({sec_i:.2f}s/{sec_tot:.2f}s, {len(frames)}f)  "
             f"速度 {int(session.speed*100)}%\n"
             f"keys:  [{keys_str}]  ch={ch_list}\n"
@@ -138,9 +155,10 @@ def format_hud(session, current_boost, obs_group=None):
         car_spd = fr.get("car_speed", 0.0)
         keys_str = fr["input"].get("keys_str", "")
         sec_i = (fr["i"] + 1) / 120.0
+        src_lbl = "MODEL 1v1" if is_auto else ("HUMAN TAKEOVER" if getattr(session, "takeover_step", None) is not None else "HUMAN RECORDING")
         body = (
             f"{focus_str}"
-            f"{'MODEL 1v1' if is_auto else 'HUMAN RECORDING'}  "
+            f"{src_lbl}  "
             f"step={fr['i']} ({sec_i:.2f}s, {len(frames)}f)  r_cum={fr['r_cum']:+.3f}\n"
             f"keys: [{keys_str}]\n"
             f"dist={fr['dist']:.1f}  spd={car_spd:.1f}  closing={closing:+.1f}\n"
@@ -156,7 +174,7 @@ def format_hud(session, current_boost, obs_group=None):
 
     return (
         boost_line,
-        f"{focus_str}按任一操作键开始人工录制  (R: 重置当前开球位 | N: 新开球位 | M: 切 MODEL/HUMAN | Enter: 导出CSV)",
+        f"{focus_str}按任一操作键开始人工录制  (R: 重置当前开球位 | N: 新开球位 | M: 切 MODEL/HUMAN | X: 回溯中途接管 | Enter: 导出CSV)",
     )
 
 

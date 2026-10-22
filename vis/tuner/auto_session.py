@@ -106,6 +106,7 @@ class AutoSession(Session):
         if getattr(self, "_ppo_ticks_left", 0) <= 0:
             act_b = self._infer_action(self._last_obs_b, record_probs=(f_idx == 0))
             act_o = self._infer_action(self._last_obs_o, record_probs=(f_idx == 1))
+            self.current_blue_action = act_b
             self.current_ppo_action = act_b if f_idx == 0 else act_o
             self.current_ppo_ctrl = multi_discrete_to_controls(act_b)
             self.current_opp_action = act_o
@@ -117,6 +118,9 @@ class AutoSession(Session):
 
         focused_ctrl = self.current_ppo_ctrl if f_idx == 0 else self.current_opp_ctrl
         input_dict = self._ppo_action_to_input_dict(self.current_ppo_action, focused_ctrl)
+        act_b_cur = getattr(self, "current_blue_action", self.current_ppo_action)
+        ctrl_b_dict = self._ppo_action_to_input_dict(act_b_cur, self.env.car_blue.get_controls())
+        ctrl_o_dict = self._ppo_action_to_input_dict(self.current_opp_action, self.env.car_orange.get_controls())
 
         snap = self.env.snapshot(car_idx=f_idx)
         obs_b, panel_b, parts_b = self.env.get_obs(car_idx=0)
@@ -204,6 +208,9 @@ class AutoSession(Session):
             "car_idx": f_idx,
             "spawn_state": self.env.last_spawn_state,
             "input": input_dict,
+            "dual_ctrls": (ctrl_b_dict, ctrl_o_dict),
+            "_ppo_ticks_left": int(self._ppo_ticks_left),
+            "_opp_ticks_left": int(self._ppo_ticks_left),
             "car_pos": snap["car_pos"], "car_vel": snap["car_vel"],
             "car_speed": snap["car_speed"], "is_supersonic": snap["is_supersonic"],
             "ball_pos": snap["ball_pos"], "ball_vel": snap["ball_vel"],
@@ -222,6 +229,7 @@ class AutoSession(Session):
             "obs_parts": obs_parts,
             "flags":     flag_snap,
             "all_cars":  all_cars,
+            "winner_car_idx": self.env.winner_car_idx,
             "ppo_value": getattr(self, "last_ppo_value", 0.0),
             "ppo_probs": getattr(self, "last_ppo_probs", None),
             "pad_ent":   0.0,

@@ -479,11 +479,13 @@ class ViewsMixin:
                     "background:#000;padding:4px;border:2px solid #fa0;")
         else:
             vs_tag = "vs MODEL 1v1" if getattr(self.session, "vs_model", True) else "SOLO"
-            self.mode_indicator.setText(f"HUMAN RECORD ({vs_tag}) [KO{slot}:{slot_name} | {car_lbl} | CAM:{cam_tag}]")
+            tk_step = getattr(self.session, "takeover_step", None)
+            tk_tag = f" | ⚡接管@{tk_step}f" if tk_step is not None else ""
+            self.mode_indicator.setText(f"HUMAN RECORD ({vs_tag}{tk_tag}) [KO{slot}:{slot_name} | {car_lbl} | CAM:{cam_tag}]")
             self.mode_indicator.setStyleSheet(
                 "color:#0fc;font-size:16px;font-weight:bold;"
                 "background:#000;padding:6px;border:2px solid #0fc;")
-            self.reset_indicator.setText("R: 重置 | N: 新开球位 | H: 切对战/单人 | Enter: 导出CSV")
+            self.reset_indicator.setText("←→回溯后按操作键/X中途接管 | R: 重置 | N: 新开球位 | H: 切对战 | Enter: 导出CSV")
             self.reset_indicator.setStyleSheet(
                 "color:#0fc;font-size:13px;font-weight:bold;"
                 "background:#000;padding:4px;border:2px solid #0fc;")

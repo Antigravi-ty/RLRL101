@@ -26,7 +26,7 @@ python3 run.py verify_tuner
 `tools/verify_tuner.py` verifies:
 - All 5 standard kickoff slots (`DiagRight`, `DiagLeft`, `BackRight`, `BackLeft`, `Center`) + 60-frame suspension settling (`SETTLE_TICKS = 60`).
 - 42D team/mirror observation symmetry and 46,096-param Pure-MLP `ActorCritic`.
-- `RewardTuner` GUI startup, Human recording (`WASD`, `/` Jump, `.` Boost, `Shift` Slide, `Q/E` Roll), `R` (reset & replay current kickoff slot), `N` (switch to a new kickoff slot), `Shift+1..5` (lock kickoff slot `0..4`), `Enter` (export CSV to `data/*.csv`), `M` (toggle `HUMAN` ↔ `MODEL 1v1`), `9`/`0` (switch `#1 BLUE` / `#2 ORANGE`), and bottom charts (`1..6`, `OBS`, `FLAGS`, `G`).
+- `RewardTuner` GUI startup, Human recording (`WASD`, `/` Jump, `.` Boost, `Shift` Slide, `Q/E` Roll), Mid-trajectory Takeover (rewind with `←/→`, `[/]`, `I/K`, `,/;` then press any driving key or `X` to take over from that frame and race the original trajectory), `R` (reset & replay current kickoff slot), `N` (switch to a new kickoff slot), `Shift+1..5` (lock kickoff slot `0..4`), `Enter` (export CSV to `data/*.csv`), `M` (toggle `HUMAN` ↔ `MODEL 1v1`), `9`/`0` (switch `#1 BLUE` / `#2 ORANGE`), and bottom charts (`1..6`, `OBS`, `FLAGS`, `G`).
 
 ---
 

@@ -68,7 +68,7 @@ class RewardTuner(UIMixin, KeysMixin, ViewsMixin, RenderMixin, AutoMixin,
         self._timer_ms = TICK_MS_IDLE
 
         self.setWindowTitle(
-            "Kickoff Tuner (1v1 Fastest Kickoff — R: 重置当前开球位 | N: 新开球位 | M: 切HUMAN/MODEL | Enter: 导出CSV)"
+            "Kickoff Tuner (1v1 Fastest Kickoff — ←→回溯后按操作键/X中途接管 | R: 重置 | N: 新开球位 | M: 切HUMAN/MODEL | Enter: 导出CSV)"
         )
         self.resize(1600, 900)
         self.setFocusPolicy(QtCore.Qt.StrongFocus)

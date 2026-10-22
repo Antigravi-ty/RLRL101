@@ -235,6 +235,7 @@ def _install_headless_qt_mocks():
         Key_L = 76
         Key_M = 77
         Key_V = 86
+        Key_X = 88
         Key_C = 67
         Key_Space = 32
         Key_Shift = 16
@@ -260,6 +261,10 @@ def _install_headless_qt_mocks():
         Key_Dollar = 36
         Key_Percent = 37
         Key_ParenRight = 41
+        Key_Left = 0x01000012
+        Key_Right = 0x01000014
+        Key_Semicolon = 59
+        Key_Apostrophe = 39
 
     qt_core.Qt = _DummyQtNamespace
     qt_core.QTimer = _DummyWidget
@@ -449,6 +454,47 @@ def verify_tuner_headless():
     w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_N))
     assert w.auto_session.state == STATE_DONE
     assert len(w.auto_session.frames) > 0
+    model_total_frames = len(w.auto_session.frames)
+
+    # 6. Verify Mid-Trajectory Takeover: rewind in Model playback and press a driving key (or X) to take over!
+    w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_I))  # seek -60 frames
+    w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_BracketLeft))  # seek -30 frames
+    rewind_idx = w.auto_session.playback_idx
+    expected_pos_at_rewind = w.auto_session.frames[rewind_idx]["car_pos"]
+    expected_vel_at_rewind = w.auto_session.frames[rewind_idx]["car_vel"]
+
+    # Pressing a driving key ('W') directly while rewound in MODEL playback immediately takes over as HUMAN!
+    w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_W))
+    assert w.use_auto is False
+    assert w.session.state == STATE_RECORDING
+    assert w.session.takeover_step == rewind_idx
+    assert len(w.session.frames) == rewind_idx + 1
+    assert w.session.ref_benchmark["frames"] == model_total_frames
+    # Verify exact deterministic physics restoration at the takeover point
+    restored_snap = w.env.snapshot(0)
+    assert np.allclose(restored_snap["car_pos"], expected_pos_at_rewind, atol=1e-4)
+    assert np.allclose(restored_snap["car_vel"], expected_vel_at_rewind, atol=1e-4)
+
+    # Advance human takeover steps and verify HUD & finish comparison message
+    w.keys["Period"] = True
+    for _ in range(10):
+        w.session._step_once(w.keys)
+    w.keys["W"] = False
+    w.keys["Period"] = False
+    assert len(w.session.frames) == rewind_idx + 11
+    assert w.session.frames[-1]["source"] == "human_takeover"
+    _, hud_body = format_hud(w.session, 50.0)
+    assert "中途接管模式" in hud_body
+    finish_msg = w.session.finish_recording("touch")
+    assert f"接管@{rewind_idx}f" in finish_msg and f"对比原轨迹({model_total_frames}f)" in finish_msg
+
+    # Also test X key takeover into STATE_IDLE (ready to press any key)
+    w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_Left))
+    w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_X))
+    assert w.session.state == STATE_IDLE and w.session.takeover_step == len(w.session.frames) - 1
+
+    # Switch back to MODEL mode and verify R replays step-by-step
+    w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_M))
     w.keyPressEvent(_FakeKeyEvent(QtCore.Qt.Key_R))
     assert w.auto_session.state == STATE_RECORDING
 
@@ -464,10 +510,12 @@ def verify_tuner_headless():
     print(
         f"[verify_tuner] ALL OK! Verified Kickoff RewardTuner startup, 5 standard kickoff slots + 60f suspension settling, "
         f"42D team/mirror symmetric obs, {total_params:,}-param Pure-MLP ActorCritic, "
-        f"Human recording + CSV export, R (replay current slot) vs N (new slot) vs Shift+1..5 (lock slot), "
+        f"Human recording + Mid-trajectory Takeover (rewind + WASD/X) + CSV export, "
+        f"R (replay current slot) vs N (new slot) vs Shift+1..5 (lock slot), "
         f"MODEL 1v1 self-play duel, 9/0 Blue/Orange car focus, and plot modes 1..6 / OBS / FLAGS / G."
     )
 
 
 if __name__ == "__main__":
     verify_tuner_headless()
+

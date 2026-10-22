@@ -136,6 +136,7 @@ class KeysMixin:
         if k == QtCore.Qt.Key_T: self._toggle_deterministic(); return
         if k == QtCore.Qt.Key_L: self._toggle_auto_reset(); return
         if k == QtCore.Qt.Key_C: self._copy_hud(); return
+        if k == QtCore.Qt.Key_X: self._takeover_from_current_frame(start_immediately=False); return
 
         if k in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
             mode = "compact" if (mods & QtCore.Qt.ShiftModifier) else "full"
@@ -145,6 +146,14 @@ class KeysMixin:
             return
 
         if sess.state in (STATE_PLAYBACK, STATE_DONE):
+            if k in (
+                QtCore.Qt.Key_Left, QtCore.Qt.Key_Right,
+                QtCore.Qt.Key_BracketLeft, QtCore.Qt.Key_BracketRight,
+                QtCore.Qt.Key_I, QtCore.Qt.Key_K,
+                QtCore.Qt.Key_Comma, QtCore.Qt.Key_Semicolon,
+                QtCore.Qt.Key_J, QtCore.Qt.Key_Apostrophe,
+            ):
+                self._pending_reset = None
             if k == QtCore.Qt.Key_Left:          self._seek(-1);  return
             if k == QtCore.Qt.Key_Right:         self._seek(+1);  return
             if k == QtCore.Qt.Key_BracketLeft:   self._seek(-30); return
@@ -160,6 +169,13 @@ class KeysMixin:
 
         if k in KEY_MAP:
             self.keys[KEY_MAP[k]] = True
+            # 若在回放/结算状态已经回溯到了中途位置，或处于 MODEL 模式回放中，按任一操作键即可直接从当前回溯帧接管继续跑!
+            if sess.state in (STATE_PLAYBACK, STATE_DONE) and sess.frames:
+                is_rewound = (sess.playback_idx < len(sess.frames) - 1)
+                if is_rewound or self.use_auto:
+                    self._takeover_from_current_frame(start_immediately=True)
+                    e.accept()
+                    return
             if not self.use_auto and sess.state == STATE_IDLE:
                 sess.begin_recording()
                 self._refresh_ui_state()

@@ -7,7 +7,7 @@ from .ui_constants import (
     STATE_IDLE, STATE_RECORDING, STATE_DONE, STATE_PLAYBACK, STATE_FREERUN,
     PHYSICS_HZ, SPEED_MIN, SPEED_MAX,
 )
-from .controls import build_car_controls, ctrl_to_dict
+from .controls import build_car_controls, ctrl_to_dict, dict_to_car_controls
 
 
 _OBS_LABELS = []
@@ -51,6 +51,24 @@ def snapshot_all_cars(env):
     return out
 
 
+def summarize_trajectory_outcome(frames):
+    """Summarize total frames, touch winner, and ball vy from a completed trajectory."""
+    if not frames:
+        return None
+    n_f = len(frames)
+    last_fr = frames[-1]
+    winner = last_fr.get("winner_car_idx")
+    bvel = last_fr.get("ball_vel", (0.0, 0.0, 0.0))
+    return {
+        "frames": n_f,
+        "sec": n_f / 120.0,
+        "winner_car_idx": winner,
+        "ball_vy": float(bvel[1]) if len(bvel) > 1 else 0.0,
+        "r_cum": float(last_fr.get("r_cum", 0.0)),
+        "source": str(last_fr.get("source", "model")),
+    }
+
+
 class Session:
     def __init__(self, env, cfg, opp_model=None, vs_model: bool = True):
         self.env = env
@@ -65,6 +83,8 @@ class Session:
         self.speed = 1.0
         self.plot_mode = 1
         self.max_buffer_frames = 720
+        self.takeover_step = None
+        self.ref_benchmark = None
         self.reset()
 
     def set_opp_model(self, model):
@@ -85,7 +105,11 @@ class Session:
         self._prev_boost = None
         self._last_time = None
         self._opp_ticks_left = 0
-        _, self._last_obs_o = self.env.get_obs_pair()
+        self.takeover_step = None
+        self.ref_benchmark = None
+        f_idx = int(getattr(self.env, "focused_car_idx", 0))
+        opp_idx = 1 - f_idx
+        self._last_obs_o, _, _ = self.env.get_obs(car_idx=opp_idx)
         self.speed = getattr(self, "speed", 1.0)
         self.plot_mode = getattr(self, "plot_mode", 1)
 
@@ -98,8 +122,81 @@ class Session:
     def begin_recording(self):
         self.state = STATE_RECORDING
         self._last_time = None
-        self._opp_ticks_left = 0
-        _, self._last_obs_o = self.env.get_obs_pair()
+        if self.takeover_step is None or len(self.frames) == 0:
+            self._opp_ticks_left = 0
+        f_idx = int(getattr(self.env, "focused_car_idx", 0))
+        opp_idx = 1 - f_idx
+        self._last_obs_o, _, _ = self.env.get_obs(car_idx=opp_idx)
+
+    def resume_from_frames(self, src_frames, up_to_idx: int, ref_benchmark=None, start_immediately: bool = False):
+        """Mid-trajectory human takeover: deterministically replay physics up to `up_to_idx`
+        and let human input take over from `up_to_idx + 1` onward.
+        """
+        if not src_frames:
+            self.reset(replay_last=True)
+            return 0
+        up_to_idx = max(0, min(int(up_to_idx), len(src_frames) - 1))
+        if ref_benchmark is None:
+            ref_benchmark = summarize_trajectory_outcome(src_frames)
+
+        sp0 = src_frames[0].get("spawn_state")
+        self.env.reset(replay_last=True, spawn_state=sp0)
+        self.cfg.max_decisions = getattr(self.env, "ep_max_decisions", MAX_DECISIONS)
+
+        f_idx = int(getattr(self.env, "focused_car_idx", 0))
+        opp_idx = 1 - f_idx
+
+        prefix = []
+        for idx in range(up_to_idx + 1):
+            fr = src_frames[idx]
+            dc = fr.get("dual_ctrls")
+            if dc and len(dc) == 2:
+                ctrl_b = dict_to_car_controls(dc[0])
+                ctrl_o = dict_to_car_controls(dc[1])
+            else:
+                inp = fr.get("input", {})
+                c_focus = dict_to_car_controls(inp)
+                c_other = dict_to_car_controls({})
+                ctrl_b = c_focus if f_idx == 0 else c_other
+                ctrl_o = c_other if f_idx == 0 else c_focus
+            self.env.step_duel_tick(ctrl_b, ctrl_o)
+            fr_copy = dict(fr)
+            fr_copy["i"] = idx
+            prefix.append(fr_copy)
+
+        # Clear any terminal touch flags if user rewound before the touch frame
+        if up_to_idx < len(src_frames) - 1 or not (self.env._touched_by_car[0] or self.env._touched_by_car[1]):
+            self.env._touched = False
+            self.env._touched_by_car = [False, False]
+            self.env.winner_car_idx = None
+
+        self.frames = prefix
+        self.playback_idx = up_to_idx
+        self.playback_playing = False
+        self.r_cum = float(prefix[-1].get("r_cum", 0.0)) if prefix else 0.0
+        self.prev_snap = self.env.snapshot(car_idx=f_idx)
+        self._last_obs_o, _, _ = self.env.get_obs(car_idx=opp_idx)
+
+        last_fr = prefix[-1]
+        if "_opp_ticks_left" in last_fr:
+            self._opp_ticks_left = int(last_fr["_opp_ticks_left"])
+        elif "_ppo_ticks_left" in last_fr:
+            self._opp_ticks_left = int(last_fr["_ppo_ticks_left"])
+        else:
+            self._opp_ticks_left = (TICKS_PER_DECISION - ((up_to_idx + 1) % TICKS_PER_DECISION)) % TICKS_PER_DECISION
+
+        dc_last = last_fr.get("dual_ctrls")
+        if dc_last and len(dc_last) == 2:
+            self.current_opp_ctrl = dict_to_car_controls(dc_last[opp_idx])
+            ch = dc_last[opp_idx].get("ppo_channels")
+            if ch is not None:
+                self.current_opp_action = np.asarray(ch, dtype=np.int64)
+
+        self.takeover_step = up_to_idx
+        self.ref_benchmark = ref_benchmark
+        self._last_time = None
+        self.state = STATE_RECORDING if start_immediately else STATE_IDLE
+        return up_to_idx
 
     def advance_recording(self, keys, now):
         if self._last_time is None:
@@ -121,9 +218,11 @@ class Session:
     def _infer_opp_ctrl(self):
         if (not getattr(self, "vs_model", False)) or (getattr(self, "opp_model", None) is None):
             return None
+        f_idx = int(getattr(self.env, "focused_car_idx", 0))
+        opp_idx = 1 - f_idx
         if getattr(self, "_opp_ticks_left", 0) <= 0:
             if self._last_obs_o is None:
-                self._last_obs_o, _, _ = self.env.get_obs(car_idx=1)
+                self._last_obs_o, _, _ = self.env.get_obs(car_idx=opp_idx)
             det = bool(getattr(self, "deterministic_opp", True))
             act_o, _, _ = self.opp_model.act_step_fast(self._last_obs_o, deterministic=det)
             self.current_opp_action = np.asarray(act_o, dtype=np.int64)
@@ -133,21 +232,25 @@ class Session:
         return self.current_opp_ctrl
 
     def _step_once(self, keys):
+        f_idx = int(getattr(self.env, "focused_car_idx", 0))
+        opp_idx = 1 - f_idx
         ctrl = build_car_controls(keys)
-        pre_cs = self.env.car.get_state()
+        pre_cs = self.env.cars[f_idx].get_state()
         if not pre_cs.is_on_ground:
             ctrl.handbrake = False
         input_dict = ctrl_to_dict(ctrl)
 
         opp_ctrl = self._infer_opp_ctrl()
         boost_used, flip_triggered, djump_triggered = self.env.step_tick(ctrl, opp_ctrl=opp_ctrl)
-        snap = self.env.snapshot(car_idx=0)
-        _, obs_o = self.env.get_obs_pair()
-        self._last_obs_o = obs_o
-        obs_full, obs_panel, obs_parts = self.env.get_obs(car_idx=0)
+        snap = self.env.snapshot(car_idx=f_idx)
+        self._last_obs_o, _, _ = self.env.get_obs(car_idx=opp_idx)
+        obs_full, obs_panel, obs_parts = self.env.get_obs(car_idx=f_idx)
         all_cars = snapshot_all_cars(self.env)
 
-        cs = self.env.car.get_state()
+        ctrl_b_applied = ctrl_to_dict(self.env.car_blue.get_controls())
+        ctrl_o_applied = ctrl_to_dict(self.env.car_orange.get_controls())
+
+        cs = self.env.cars[f_idx].get_state()
         flag_snap = {
             "on_ground":     bool(cs.is_on_ground),
             "is_jumping":    bool(cs.is_jumping),
@@ -170,6 +273,8 @@ class Session:
         prev = self.prev_snap
         tb = bool(self.env._touched_by_car[0])
         to = bool(self.env._touched_by_car[1])
+        my_touch = tb if f_idx == 0 else to
+        opp_touch = to if f_idx == 0 else tb
         any_touch = tb or to
 
         if prev is None:
@@ -203,8 +308,8 @@ class Session:
                 handbrake_held_ticks=1 if self.env.last_handbrake_held else 0,
                 djump_triggered=djump_triggered,
                 flip_triggered=flip_triggered,
-                touched=tb,
-                opp_touched=to,
+                touched=my_touch,
+                opp_touched=opp_touch,
                 timeout=timeout,
                 ticks_elapsed=1,
                 prev_snap=prev,
@@ -214,11 +319,16 @@ class Session:
             )
             self.r_cum += r_total
 
+        src_tag = "human_takeover" if self.takeover_step is not None else "human"
         self.frames.append({
             "i": len(self.frames),
-            "source": "human",
+            "source": src_tag,
+            "car_idx": f_idx,
+            "takeover_step": self.takeover_step,
             "spawn_state": self.env.last_spawn_state,
             "input": input_dict,
+            "dual_ctrls": (ctrl_b_applied, ctrl_o_applied),
+            "_opp_ticks_left": int(self._opp_ticks_left),
             "car_pos": snap["car_pos"], "car_vel": snap["car_vel"],
             "car_speed": snap["car_speed"], "is_supersonic": snap["is_supersonic"],
             "ball_pos": snap["ball_pos"], "ball_vel": snap["ball_vel"],
@@ -243,9 +353,9 @@ class Session:
 
         if tb and to:
             return "tie_touch"
-        if tb:
+        if my_touch:
             return "touch"
-        if to:
+        if opp_touch:
             return "touch_model_opp"
         if timeout:
             return "timeout"
@@ -259,15 +369,21 @@ class Session:
         extra_str = ""
         if self.frames:
             bvel = self.frames[-1].get("ball_vel", (0.0, 0.0, 0.0))
-            if reason in ("touch", "touch_blue"):
+            if reason in ("touch", "touch_blue", "touch_orange"):
                 extra_str = f" | 球纵向vy={bvel[1]:+.0f}"
             elif reason == "tie_touch":
                 extra_str = " | 同时触球(平局)"
             elif reason == "touch_model_opp":
                 extra_str = f" | 对手Model先触球(剩{self.frames[-1].get('dist', 0.0):.0f}uu)"
+        if self.takeover_step is not None and self.ref_benchmark is not None:
+            ref_f = int(self.ref_benchmark.get("frames", n_f))
+            df = n_f - ref_f
+            ds = df / 120.0
+            cmp_tag = f"快{-df}f({-ds:.2f}s)!" if df < 0 else (f"慢+{df}f(+{ds:.2f}s)" if df > 0 else "持平(0f)")
+            extra_str += f" | 接管@{self.takeover_step}f 对比原轨迹({ref_f}f): {cmp_tag}"
         return (
             f"完成 ({reason})  {n_f} 帧 ({sec:.2f}s){extra_str} / "
-            f"累计 {self.r_cum:+.2f}  [J 回放 | R 重置当前 | N 新开球位 | H 切单人/对战 | Enter 导出CSV]"
+            f"累计 {self.r_cum:+.2f}  [←→回溯后按操作键/X中途接管 | J 回放 | R 重置当前 | N 新开球位 | Enter 导出CSV]"
         )
 
     def tick_playback(self):

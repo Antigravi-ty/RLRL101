@@ -29,3 +29,19 @@ def ctrl_to_dict(c):
     d["ppo_channels"] = [int(x) for x in ch]
     d["keys_str"] = multi_discrete_to_key_str(ch)
     return d
+
+
+def dict_to_car_controls(d):
+    c = rs.CarControls()
+    if not d:
+        return c
+    c.throttle = float(d.get("thr", 0.0))
+    c.steer = float(d.get("str", 0.0))
+    c.pitch = float(d.get("ptc", 0.0))
+    c.yaw = float(d.get("yaw", 0.0))
+    c.roll = float(d.get("roll", 0.0))
+    c.jump = bool(d.get("jump", False))
+    c.boost = bool(d.get("boost", False))
+    c.handbrake = bool(d.get("handbrake", False))
+    return c
+

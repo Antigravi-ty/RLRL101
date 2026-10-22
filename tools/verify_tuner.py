@@ -229,6 +229,7 @@ def _install_headless_qt_mocks():
         Key_O = 79
         Key_P = 80
         Key_F = 70
+        Key_H = 72
         Key_J = 74
         Key_K = 75
         Key_L = 76
@@ -302,16 +303,18 @@ def verify_tuner_headless():
     # 1. Verify compact ActorCritic parameter count (~36K) & 42D observation symmetry
     model = ActorCritic()
     assert OBS_DIM == 42 and PPO_HIDDEN_DIM == 128
-    w_shapes = [v.shape for v in model._np_state.values()]
+    sd = model.state_dict()
+    w_shapes = [tuple(v.shape) for v in sd.values()]
     total_params = sum(int(np.prod(s)) for s in w_shapes)
-    actor_params = sum(int(np.prod(v.shape)) for k, v in model._np_state.items() if k.startswith("actor"))
+    actor_params = sum(int(np.prod(tuple(v.shape))) for k, v in sd.items() if k.startswith("actor"))
     assert total_params == 46096 and actor_params == 23951, f"Unexpected params: total={total_params}, actor={actor_params}"
 
     # 2. Instantiate RewardTuner and verify 60-frame suspension settling across all 5 kickoff slots
-    w = RewardTuner(prefix="kickoff_v1", from_ckpt="best", cam_mode="center")
+    w = RewardTuner(prefix="ko_v1", from_ckpt="best", cam_mode="center")
     w.tick()
     assert w.session.state == STATE_IDLE
     assert w.env.settle_ticks == SETTLE_TICKS == 60
+    assert w.session.vs_model is True and w.session.opp_model is not None
 
     seen_slots = set()
     for slot_i in range(NUM_KICKOFF_SLOTS):

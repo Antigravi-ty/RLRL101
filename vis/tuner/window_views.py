@@ -478,11 +478,12 @@ class ViewsMixin:
                     "color:#fa0;font-size:14px;font-weight:bold;"
                     "background:#000;padding:4px;border:2px solid #fa0;")
         else:
-            self.mode_indicator.setText(f"HUMAN RECORD [KO{slot}:{slot_name} | {car_lbl} | CAM:{cam_tag}]")
+            vs_tag = "vs MODEL 1v1" if getattr(self.session, "vs_model", True) else "SOLO"
+            self.mode_indicator.setText(f"HUMAN RECORD ({vs_tag}) [KO{slot}:{slot_name} | {car_lbl} | CAM:{cam_tag}]")
             self.mode_indicator.setStyleSheet(
                 "color:#0fc;font-size:16px;font-weight:bold;"
                 "background:#000;padding:6px;border:2px solid #0fc;")
-            self.reset_indicator.setText("R: 重置当前 | N: 新开球位 | Enter: 导出CSV")
+            self.reset_indicator.setText("R: 重置 | N: 新开球位 | H: 切对战/单人 | Enter: 导出CSV")
             self.reset_indicator.setStyleSheet(
                 "color:#0fc;font-size:13px;font-weight:bold;"
                 "background:#000;padding:4px;border:2px solid #0fc;")

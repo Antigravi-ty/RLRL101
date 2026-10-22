@@ -74,8 +74,9 @@ class RewardTuner(UIMixin, KeysMixin, ViewsMixin, RenderMixin, AutoMixin,
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
 
         self.env = KickoffEnv(spawn_dist=spawn_dist)
-        self.session = Session(self.env, RewardConfig())
+        self.session = Session(self.env, RewardConfig(), vs_model=True)
         self.session.plot_mode = self.plot_mode
+        self._sync_human_opp_model()
         self.keys = {k: False for k in KEY_NAMES}
 
         self._build_ui()

@@ -111,7 +111,7 @@ def format_hud(session, current_boost, obs_group=None):
             f"       up =({up[0]:+.2f},{up[1]:+.2f},{up[2]:+.2f})\n"
             f"       rgt=({rgt[0]:+.2f},{rgt[1]:+.2f},{rgt[2]:+.2f})\n"
             f"ball:  pos=({fr['ball_pos'][0]:.0f},{fr['ball_pos'][1]:.0f},"
-            f"{fr['ball_pos'][2]:.0f}) [KICKOFF BALL]\n"
+            f"{fr['ball_pos'][2]:.0f}) vel=({fr.get('ball_vel',(0,0,0))[0]:+.0f},{fr.get('ball_vel',(0,0,0))[1]:+.0f},{fr.get('ball_vel',(0,0,0))[2]:+.0f})\n"
             f"dist:  {fr['dist']:.1f}  (h={fr['dist_h']:.1f})  "
             f"closing={closing:+.1f}\n"
         )

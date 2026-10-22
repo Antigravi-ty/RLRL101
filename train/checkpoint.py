@@ -166,6 +166,7 @@ def evaluate_5slot_kickoff(
     slot_frames = []
     slot_secs = []
     slot_speeds = []
+    slot_ball_vys = []
     touch_steps = []
     all_steps = []
     rcum_list = []
@@ -184,6 +185,7 @@ def evaluate_5slot_kickoff(
         ep_flipped = False
         touched_now = False
         touch_spd = 0.0
+        touch_bvy = 0.0
 
         for step in range(1, max_decisions + 1):
             if dev_type == "cpu" and hasattr(model, "act_step_fast"):
@@ -223,12 +225,14 @@ def evaluate_5slot_kickoff(
                 ticks_elapsed=ticks_run,
                 ep_ticks=ep_ticks,
                 max_decisions_ep=max_decisions,
+                new_snap=snap_now,
             )
             ep_rcum += r_step
             prev_dist = new_dist
 
             if touched_now:
                 touch_spd = snap_now["car_speed"]
+                touch_bvy = float(snap_now["ball_vel"][1])
                 break
 
             obs_curr, _, _ = env.get_obs()
@@ -246,6 +250,7 @@ def evaluate_5slot_kickoff(
         slot_frames.append(frames_val)
         slot_secs.append(frames_val / 120.0)
         slot_speeds.append(touch_spd)
+        slot_ball_vys.append(touch_bvy)
         if touched_now:
             touch_steps.append(exact_step)
         all_steps.append(exact_step)
@@ -259,9 +264,10 @@ def evaluate_5slot_kickoff(
     touch_ticks = mean_touch_step * float(TICKS_PER_DECISION)
     all_ticks = float(np.mean(slot_frames))
     min_ticks = float(np.min(slot_frames))
+    mean_ball_vy = float(np.mean(slot_ball_vys)) if slot_ball_vys else 0.0
 
     slot_summary = " ".join(
-        f"{KICKOFF_SLOT_SHORT[i]}:{slot_frames[i]}f({slot_secs[i]:.2f}s)"
+        f"{KICKOFF_SLOT_SHORT[i]}:{slot_frames[i]}f({slot_secs[i]:.2f}s,vy={slot_ball_vys[i]:.0f})"
         for i in range(NUM_KICKOFF_SLOTS)
     )
 
@@ -273,6 +279,8 @@ def evaluate_5slot_kickoff(
         "slot_frames": slot_frames,
         "slot_secs": slot_secs,
         "slot_speeds": slot_speeds,
+        "slot_ball_vys": slot_ball_vys,
+        "mean_ball_vy": mean_ball_vy,
         "bin_counts": bin_counts,
         "bin_touches": bin_counts,
         "stage_rates": stage_rates,
@@ -301,13 +309,14 @@ evaluate_6stage_grid = evaluate_5slot_kickoff
 
 
 class BestTracker:
-    """追踪并保存 5 个标准开球位总用时最短 (Fastest) 的最优模型权重。"""
+    """追踪并保存 5 个标准开球位总用时最短 (Fastest)、同帧数下球纵向速度 (ball_vy) 最大的最优模型权重。"""
     def __init__(self, save_path=None, mode="kickoff", load_existing=False, **kwargs):
         self.save_path = save_path or CKPT_BEST
         self.mode = mode
         self.best_model = None
         self.best_touch_count = 0
         self.best_all_ticks = float("inf")
+        self.best_mean_ball_vy = -float("inf")
         self.best_slot_frames = [720] * NUM_KICKOFF_SLOTS
         self.best_ep = 0
         self.last_duel_info = ""
@@ -318,6 +327,7 @@ class BestTracker:
                 self.best_model = m
                 self.best_touch_count = int(ck.get("touch_count", 0))
                 self.best_all_ticks = float(ck.get("all_avg_ticks", float("inf")))
+                self.best_mean_ball_vy = float(ck.get("mean_ball_vy", -float("inf")))
                 self.best_ep = int(ck.get("episode", 0))
             except Exception:
                 pass
@@ -334,6 +344,7 @@ class BestTracker:
         n_tot = c_res["n_total"]
         c_ticks = c_res["all_ticks"]
         c_sec = c_res["all_sec"]
+        c_bvy = c_res["mean_ball_vy"]
 
         meta = {
             "grid_code": c_res["grid_code"],
@@ -343,6 +354,8 @@ class BestTracker:
             "all_avg_sec": c_sec,
             "min_ticks": c_res["min_ticks"],
             "slot_frames": c_res["slot_frames"],
+            "slot_ball_vys": c_res["slot_ball_vys"],
+            "mean_ball_vy": c_bvy,
             "touch_rate": c_tc / max(1, n_tot),
         }
         if extra_meta:
@@ -352,6 +365,11 @@ class BestTracker:
             self.best_model is None
             or (c_tc > self.best_touch_count)
             or (c_tc == self.best_touch_count and c_ticks < self.best_all_ticks - 1e-4)
+            or (
+                c_tc == self.best_touch_count
+                and abs(c_ticks - self.best_all_ticks) <= 1e-4
+                and c_bvy > self.best_mean_ball_vy + 1e-2
+            )
         )
 
         prev_ticks = self.best_all_ticks
@@ -362,11 +380,12 @@ class BestTracker:
             self.best_model.eval()
             self.best_touch_count = c_tc
             self.best_all_ticks = c_ticks
+            self.best_mean_ball_vy = c_bvy
             self.best_slot_frames = list(c_res["slot_frames"])
             self.best_ep = episode
             save_ckpt(
                 self.save_path, model, episode, mode=self.mode,
-                note=f"5slot {c_tc}/{n_tot} avg={c_ticks:.1f}f({c_sec:.2f}s) [{c_res['slot_summary']}]",
+                note=f"5slot {c_tc}/{n_tot} avg={c_ticks:.1f}f({c_sec:.2f}s) vy={c_bvy:.0f} [{c_res['slot_summary']}]",
                 extra=meta,
             )
 

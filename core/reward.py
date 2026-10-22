@@ -26,6 +26,7 @@ class RewardConfig:
     touch_time_bonus_max:    float = 95.0               # 非线性时间大奖上限 (越快越呈立方级暴涨)
     time_bonus_power:        float = 3.0                # 非线性时间奖励幂次 (p=3.0 强力拉开 1.90s SpeedFlip 与 2.20s 直线冲刺的差距)
     min_possible_ticks:      float = 180.0              # 理论极限最短帧数锚点 (1.50s = 180 ticks)
+    ball_vy_bonus_scale:     float = 0.005              # 独自触球瞬间球纵向速度奖励系数 (同时触球平局时球初速为无效数据不计分)
     lose_penalty:            float = 35.0               # 1v1 慢于对手被抢先触球的基础惩罚
     lose_dist_penalty_scale: float = 0.010              # 失败/超时时未跑完的剩余距离追加惩罚系数
     timeout_penalty:         float = 45.0               # 6秒 (720 ticks) 未触球超时惩罚
@@ -43,6 +44,9 @@ def compute_step_reward(
     ticks_elapsed: int = 1,
     ep_ticks: int = 0,
     max_decisions_ep: int = None,
+    new_snap: dict = None,
+    ball_vel_y: float = None,
+    is_orange: bool = False,
     **kwargs,
 ):
     elapsed_ticks = float(max(1, int(ticks_elapsed)))
@@ -58,7 +62,7 @@ def compute_step_reward(
     # 2. 每物理帧时间惩罚
     r_time = -cfg.time_penalty_per_tick * elapsed_ticks
 
-    # 3. 终端非线性极速大奖 & 1v1 胜负零和惩罚
+    # 3. 终端非线性极速大奖 & 1v1 胜负零和惩罚 & 独自触球纵向球速加成
     eff_max_dec = int(max_decisions_ep) if (max_decisions_ep is not None and max_decisions_ep > 0) else int(cfg.max_decisions)
     max_ticks = float(max(1, eff_max_dec * TICKS_PER_DECISION))
     min_ticks = float(min(max_ticks - 1.0, max(0.0, cfg.min_possible_ticks)))
@@ -73,11 +77,18 @@ def compute_step_reward(
             speed_ratio = 0.5
         nonlinear_time_bonus = cfg.touch_time_bonus_max * (speed_ratio ** cfg.time_bonus_power)
         if opp_touched:
-            # 同一物理帧双方同时触球 (平局): 基础胜利分折半，依然享有速度时间分
+            # 同一物理帧双方同时触球 (平局): 基础胜利分折半，依然享有速度时间分；此时球第一瞬间速度属于对撞无效数据，不计球速分
             r_touch = 0.5 * cfg.touch_bonus + nonlinear_time_bonus
         else:
-            # 独自率先触球获胜!
-            r_touch = cfg.touch_bonus + nonlinear_time_bonus
+            # 独自率先触球获胜: 额外根据开球瞬间球的纵向速度 (朝对方球门方向 vy) 给予奖励
+            vy_val = 0.0
+            if ball_vel_y is not None:
+                vy_val = (-1.0 if is_orange else 1.0) * float(ball_vel_y)
+            elif isinstance(new_snap, dict) and "ball_vel" in new_snap:
+                team_s = -1.0 if int(new_snap.get("team", 0)) == 1 else 1.0
+                vy_val = team_s * float(new_snap["ball_vel"][1])
+            vy_bonus = max(0.0, vy_val) * getattr(cfg, "ball_vy_bonus_scale", 0.0)
+            r_touch = cfg.touch_bonus + nonlinear_time_bonus + vy_bonus
     elif opp_touched:
         # 被对手抢先触球 (1v1 战败惩罚 + 剩余未闭合距离惩罚)
         rem_dist = max(0.0, float(new_dist) - cfg.touch_surface_dist)

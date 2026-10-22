@@ -1,6 +1,7 @@
 import numpy as np
 from core.constants import TICKS_PER_DECISION, MAX_DECISIONS, OBS_PANEL_DIM
 from core.obs import OBS_GROUPS, GROUP_ORDER
+from core.policy_net import multi_discrete_to_controls
 from core.reward import compute_step_reward
 from .ui_constants import (
     STATE_IDLE, STATE_RECORDING, STATE_DONE, STATE_PLAYBACK, STATE_FREERUN,
@@ -51,13 +52,23 @@ def snapshot_all_cars(env):
 
 
 class Session:
-    def __init__(self, env, cfg):
+    def __init__(self, env, cfg, opp_model=None, vs_model: bool = True):
         self.env = env
         self.cfg = cfg
+        self.opp_model = opp_model
+        self.vs_model = bool(vs_model)
+        self.deterministic_opp = True
+        self._opp_ticks_left = 0
+        self._last_obs_o = None
+        self.current_opp_action = np.array([1, 1, 1, 0, 0, 0], dtype=np.int64)
+        self.current_opp_ctrl = multi_discrete_to_controls(self.current_opp_action)
         self.speed = 1.0
         self.plot_mode = 1
         self.max_buffer_frames = 720
         self.reset()
+
+    def set_opp_model(self, model):
+        self.opp_model = model
 
     def set_buffer_duration(self, max_frames: int):
         self.max_buffer_frames = max(10, int(max_frames))
@@ -73,6 +84,8 @@ class Session:
         self.prev_snap = None
         self._prev_boost = None
         self._last_time = None
+        self._opp_ticks_left = 0
+        _, self._last_obs_o = self.env.get_obs_pair()
         self.speed = getattr(self, "speed", 1.0)
         self.plot_mode = getattr(self, "plot_mode", 1)
 
@@ -85,6 +98,8 @@ class Session:
     def begin_recording(self):
         self.state = STATE_RECORDING
         self._last_time = None
+        self._opp_ticks_left = 0
+        _, self._last_obs_o = self.env.get_obs_pair()
 
     def advance_recording(self, keys, now):
         if self._last_time is None:
@@ -103,6 +118,20 @@ class Session:
                 return reason
         return None
 
+    def _infer_opp_ctrl(self):
+        if (not getattr(self, "vs_model", False)) or (getattr(self, "opp_model", None) is None):
+            return None
+        if getattr(self, "_opp_ticks_left", 0) <= 0:
+            if self._last_obs_o is None:
+                self._last_obs_o, _, _ = self.env.get_obs(car_idx=1)
+            det = bool(getattr(self, "deterministic_opp", True))
+            act_o, _, _ = self.opp_model.act_step_fast(self._last_obs_o, deterministic=det)
+            self.current_opp_action = np.asarray(act_o, dtype=np.int64)
+            self.current_opp_ctrl = multi_discrete_to_controls(self.current_opp_action)
+            self._opp_ticks_left = TICKS_PER_DECISION
+        self._opp_ticks_left -= 1
+        return self.current_opp_ctrl
+
     def _step_once(self, keys):
         ctrl = build_car_controls(keys)
         pre_cs = self.env.car.get_state()
@@ -110,8 +139,11 @@ class Session:
             ctrl.handbrake = False
         input_dict = ctrl_to_dict(ctrl)
 
-        boost_used, flip_triggered, djump_triggered = self.env.step_tick(ctrl)
+        opp_ctrl = self._infer_opp_ctrl()
+        boost_used, flip_triggered, djump_triggered = self.env.step_tick(ctrl, opp_ctrl=opp_ctrl)
         snap = self.env.snapshot(car_idx=0)
+        _, obs_o = self.env.get_obs_pair()
+        self._last_obs_o = obs_o
         obs_full, obs_panel, obs_parts = self.env.get_obs(car_idx=0)
         all_cars = snapshot_all_cars(self.env)
 
@@ -136,6 +168,10 @@ class Session:
         max_dec = getattr(self.env, "ep_max_decisions", getattr(self.cfg, "max_decisions", MAX_DECISIONS))
         rec_limit = max_dec * TICKS_PER_DECISION
         prev = self.prev_snap
+        tb = bool(self.env._touched_by_car[0])
+        to = bool(self.env._touched_by_car[1])
+        any_touch = tb or to
+
         if prev is None:
             r_total = 0.0
             detail = {
@@ -149,11 +185,9 @@ class Session:
                 "r_min_dist": 0.0,
                 "r_total": 0.0,
             }
-            touched = False
             timeout = False
         else:
-            touched = snap["touched"]
-            timeout = (len(self.frames) + 1) >= rec_limit
+            timeout = (len(self.frames) + 1) >= rec_limit and (not any_touch)
             r_total, detail = compute_step_reward(
                 self.cfg,
                 prev_dist=prev["dist"],
@@ -169,8 +203,8 @@ class Session:
                 handbrake_held_ticks=1 if self.env.last_handbrake_held else 0,
                 djump_triggered=djump_triggered,
                 flip_triggered=flip_triggered,
-                touched=touched,
-                lost_touch=False,
+                touched=tb,
+                opp_touched=to,
                 timeout=timeout,
                 ticks_elapsed=1,
                 prev_snap=prev,
@@ -203,11 +237,18 @@ class Session:
             "obs_parts": obs_parts,
             "flags":     flag_snap,
             "all_cars":  all_cars,
+            "winner_car_idx": self.env.winner_car_idx,
         })
         self.prev_snap = snap
 
-        if touched or timeout:
-            return "touch" if touched else "timeout"
+        if tb and to:
+            return "tie_touch"
+        if tb:
+            return "touch"
+        if to:
+            return "touch_model_opp"
+        if timeout:
+            return "timeout"
         return None
 
     def finish_recording(self, reason):
@@ -215,9 +256,18 @@ class Session:
         self.playback_idx = max(0, len(self.frames) - 1)
         n_f = len(self.frames)
         sec = n_f / 120.0
+        extra_str = ""
+        if self.frames:
+            bvel = self.frames[-1].get("ball_vel", (0.0, 0.0, 0.0))
+            if reason in ("touch", "touch_blue"):
+                extra_str = f" | 球纵向vy={bvel[1]:+.0f}"
+            elif reason == "tie_touch":
+                extra_str = " | 同时触球(平局)"
+            elif reason == "touch_model_opp":
+                extra_str = f" | 对手Model先触球(剩{self.frames[-1].get('dist', 0.0):.0f}uu)"
         return (
-            f"完成 ({reason})  {n_f} 帧 ({sec:.2f}s) / "
-            f"累计 {self.r_cum:+.2f}  [J 回放 | R 重置当前 | N 新开球位 | Enter 导出CSV]"
+            f"完成 ({reason})  {n_f} 帧 ({sec:.2f}s){extra_str} / "
+            f"累计 {self.r_cum:+.2f}  [J 回放 | R 重置当前 | N 新开球位 | H 切单人/对战 | Enter 导出CSV]"
         )
 
     def tick_playback(self):

@@ -2,5 +2,7 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 checkpoints/*
+!checkpoints/ko_v1_best.pt
+!checkpoints/ko_v1_latest.pt
 logs/
 data/

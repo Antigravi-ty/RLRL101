@@ -125,6 +125,7 @@ def _worker_loop(conn, mode, seed, logit_clamp, reward_cfg=None, init_slot_idx=N
                     ticks_elapsed=ticks_run,
                     ep_ticks=ep_ticks,
                     max_decisions_ep=max_dec_cfg,
+                    new_snap=snap_b,
                 )
                 r_o, _ = compute_step_reward(
                     cfg,
@@ -137,6 +138,7 @@ def _worker_loop(conn, mode, seed, logit_clamp, reward_cfg=None, init_slot_idx=N
                     ticks_elapsed=ticks_run,
                     ep_ticks=ep_ticks,
                     max_decisions_ep=max_dec_cfg,
+                    new_snap=snap_o,
                 )
 
                 ep_rew_b += r_b

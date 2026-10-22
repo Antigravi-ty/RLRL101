@@ -322,7 +322,7 @@ class UIMixin:
         right.addWidget(self.cfg_label, stretch=0)
 
         help_txt = (
-            "人工录制: WASD  /(跳)  .(喷气)  Shift(漂移)  Q/E(横滚)  |  Enter: 导出CSV对局记录 (Shift+Enter 精简版)\n"
+            "人工录制: WASD  /(跳)  .(喷气)  Shift(漂移)  Q/E(横滚)  |  H: 切换 HUMAN vs MODEL 对战 ↔ 单人  |  Enter: 导出CSV\n"
             "开球控制: R 重置并重新执行当前开球位  |  N 切换一个新的开球位  |  Shift+1..5 锁定开球位 0..4 (Shift+0 恢复轮换)\n"
             "模型对比: M 切换 HUMAN(人工录制) ↔ MODEL(1v1自博弈)  |  9/0 切换 #1 BLUE / #2 ORANGE 视角车\n"
             "回放控制: J 播放/暂停  |  ←→(±1)  [/](±30)  I/K(±60)  ,( -10)  ;(+10)  |  - / = 调速  |  L 切连播\n"

@@ -32,6 +32,7 @@ def evaluate_model(ckpt_path, verbose=False):
     print(f"  总触球率 (Touch Rate)       : {res['touch_count']}/{res['n_total']} ({res['touch_rate']:.1%})")
     print(f"  命中平均用时 (Touch Time)   : {res['touch_sec']:.2f}s ({res['touch_ticks']:.1f}f / {res['touch_dec']:.2f}步)")
     print(f"  全样本含罚用时 (All Time)   : {res['all_sec']:.2f}s ({res['all_ticks']:.1f}f)")
+    print(f"  开球纵向球速 (Mean Ball vy) : {res.get('mean_ball_vy', 0.0):+.1f} uu/s")
     print(f"  触发跳跃/翻滚槽位 (Jump/Flip): Jump={res['jump_eps']}/{res['n_total']} | Flip={res['flip_eps']}/{res['n_total']}")
     print(f"  平均总分 (Mean r_cum)       : {res['mean_rcum']:+.2f}")
 
@@ -39,8 +40,9 @@ def evaluate_model(ckpt_path, verbose=False):
     for s_idx, s_name in enumerate(KICKOFF_SLOT_NAMES):
         hit = res["slot_touches"][s_idx]
         f_cnt = res["slot_frames"][s_idx]
+        bvy = res.get("slot_ball_vys", [0.0]*5)[s_idx]
         sec = f_cnt / 120.0
-        status = f"TOUCH @ {sec:4.2f}s ({f_cnt:3d}f)" if hit else f"TIMEOUT ({sec:4.2f}s / {f_cnt:3d}f)"
+        status = f"TOUCH @ {sec:4.2f}s ({f_cnt:3d}f) | ball_vy={bvy:+7.1f} uu/s" if hit else f"TIMEOUT ({sec:4.2f}s / {f_cnt:3d}f)"
         print(f"    KO{s_idx} {s_name:<12} : {status}")
 
     dt = time.time() - t0

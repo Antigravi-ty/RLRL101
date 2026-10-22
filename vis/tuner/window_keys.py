@@ -132,6 +132,7 @@ class KeysMixin:
         if k in (QtCore.Qt.Key_Equal, QtCore.Qt.Key_Plus): self._adjust_speed(+SPEED_STEP); return
 
         if k == QtCore.Qt.Key_M: self._toggle_auto(); return
+        if k == QtCore.Qt.Key_H: self._toggle_human_vs_model(); return
         if k == QtCore.Qt.Key_T: self._toggle_deterministic(); return
         if k == QtCore.Qt.Key_L: self._toggle_auto_reset(); return
         if k == QtCore.Qt.Key_C: self._copy_hud(); return
